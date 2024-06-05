@@ -1,0 +1,473 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  bookboost-lambdas-sam/audiobooks
+Transform:
+  - AWS::Serverless-2016-10-31
+Parameters:
+  SnsTopic:
+    Type: String
+  FQDN:
+    Type: String
+  ZoneId:
+    Type: String
+  JwtIssuer:
+    Type: String
+  JwtAudience:
+    Type: String
+  BaseDomain:
+    Type: String
+  FromEmail:
+    Type: String
+  ToEmail:
+    Type: String
+
+Globals:
+  Function:
+    Timeout: 100
+    Runtime: nodejs20.x
+    CodeUri: .
+    Environment:
+      Variables:
+        AUDIOBOOKS_TABLE: !Ref AudiobooksTable
+        REVISIONS_TABLE: !Ref RevisionsTable
+        SNS_TOPIC: !Ref SnsTopic
+        FROM_EMAIL: !Ref FromEmail
+        TO_EMAIL: !Ref ToEmail
+        BASE_DOMAIN: !Ref BaseDomain
+        NODE_OPTIONS: '--enable-source-maps'
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref FQDN
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref FQDN
+          HostedZoneId: !Ref ZoneId
+  CoreApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      Auth:
+        DefaultAuthorizer: Auth0
+        Authorizers:
+          Auth0:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Ref JwtIssuer
+              audience:
+                - !Ref JwtAudience
+      StageName: prod
+      Domain:
+        DomainName: !Ref FQDN
+        CertificateArn: !Ref Certificate
+        Route53:
+          HostedZoneId: !Ref ZoneId
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+        AllowOrigins:
+          - '*'
+        AllowHeaders:
+          - '*'
+  getAllAudiobooksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Handler: audiobooks/api.getAll
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks
+            Method: GET
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/api.ts
+  getAudiobookByIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: audiobooks/api.get
+      Policies:
+        # Give Create/Read/Update/Delete Permissions to the SampleTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks/{id}
+            Method: GET
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/api.ts
+  createAudiobookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: audiobooks/api.create
+      Policies:
+        - Statement:
+            - Sid: SNSPublishMessagePolicy
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SnsTopic
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks
+            Method: POST
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/api.ts
+  updateAudiobookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: audiobooks/api.update
+      Policies:
+        - Statement:
+            - Sid: SNSPublishMessagePolicy
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SnsTopic
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks/{id}
+            Method: PUT
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/api.ts
+  deleteAudiobookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: audiobooks/api.destroy
+      Policies:
+        - Statement:
+            - Sid: SNSPublishMessagePolicy
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SnsTopic
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks/{id}
+            Method: DELETE
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/api.ts
+  RevisionsGetByAudiobookIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevisionsTable
+      Handler: revisions/api.getByAudiobookId
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks/{audiobookId}/revisions
+            Method: GET
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - revisions/api.ts
+  CreateRevisionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - Statement:
+            - Sid: SNSPublishMessagePolicy
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SnsTopic
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevisionsTable
+      Handler: revisions/api.create
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Path: /audiobooks/{audiobookId}/revisions
+            Method: POST
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - revisions/api.ts
+
+  # Admin routes
+  AdminGetByUserIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Handler: audiobooks/admin.getByUserId
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: Auth0
+              AuthorizationScopes:
+                - 'manage:users'
+            Path: /admin/{userId}/audiobooks
+            Method: GET
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/admin.ts
+  AdminUpdateByUserIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AudiobooksTable
+      Handler: audiobooks/admin.update
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: Auth0
+              AuthorizationScopes:
+                - 'manage:users'
+            Path: /admin/{userId}/audiobooks/{audiobookId}
+            Method: PUT
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - audiobooks/admin.ts
+  AdminRevisionsGetByAudiobookIdFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevisionsTable
+      Handler: revisions/admin.getByAudiobookId
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: Auth0
+              AuthorizationScopes:
+                - 'manage:users'
+            Path: /admin/{userId}/audiobooks/{audiobookId}/revisions
+            Method: GET
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - revisions/admin.ts
+  AdminCreateRevisionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Policies:
+        - Statement:
+            - Sid: SNSPublishMessagePolicy
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref SnsTopic
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevisionsTable
+      Handler: revisions/admin.create
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref CoreApi
+            Auth:
+              Authorizer: Auth0
+              AuthorizationScopes:
+                - 'manage:users'
+            Path: /admin/{userId}/audiobooks/{audiobookId}/revisions
+            Method: POST
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - revisions/admin.ts
+
+  # Audiobooks Queue
+  AudiobooksQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 100
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AudiobooksDLQueue.Arn
+        maxReceiveCount: 10
+
+  AudiobooksDLQueue:
+    Type: AWS::SQS::Queue
+
+  # Allow SNS topic to send messages to the queue
+  AudiobooksQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - sqs:*
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Resource: !GetAtt AudiobooksQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref SnsTopic
+      Queues:
+        - !Ref AudiobooksQueue
+
+  # Subscribe the queue to the SNS topic
+  AudiobooksSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: sqs
+      TopicArn: !Ref SnsTopic
+      Endpoint: !GetAtt AudiobooksQueue.Arn
+
+  # Mailer Function
+  AudiobooksQueueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: consumer.handler
+      Events:
+        SQSEventSource:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt AudiobooksQueue.Arn
+            BatchSize: 10
+      Policies:
+        # Allow function to send email through SES
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RevisionsTable
+        - SESCrudPolicy:
+            IdentityName: !Ref BaseDomain
+        - SESCrudPolicy:
+            IdentityName: !Ref FromEmail
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: '*'
+    Metadata: # Manage esbuild properties
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: 'es2020'
+        Sourcemap: true
+        EntryPoints:
+          - consumer.ts
+
+  RevisionsTable:
+    Type: AWS::DynamoDB::Table
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: Id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+  AudiobooksTable:
+    Type: AWS::DynamoDB::Table
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: Id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: Id
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+
+Outputs:
+  AudiobooksTableName:
+    Description: Audiobooks Table Name
+    Value: !Ref AudiobooksTable
