@@ -13,11 +13,15 @@ import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-node
 import { join } from 'path'
 
 import { createQueueConsumer } from '../core/_infra'
+import { getSources } from './events/router'
 
 interface NotificationsProps extends cdk.StackProps {
   eventBusName: string
   domainName: string
   zoneName: string
+  fromEmail: string
+  toEmail: string
+  emailDomain: string
 }
 
 export class NotificationsStack extends cdk.Stack {
@@ -31,15 +35,30 @@ export class NotificationsStack extends cdk.Stack {
       timeToLiveAttribute: 'TimeToLive'
     })
 
+    const notificationsTable = new dynamodb.Table(this, 'NotificationsTable', {
+      partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    })
+
     // Defaults for lambda functions
     const lambdaDefaults: NodejsFunctionProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       timeout: cdk.Duration.seconds(5),
       tracing: lambda.Tracing.ACTIVE,
-      entry: join(__dirname, 'api.ts'),
+      bundling: {
+        minify: false,
+        sourceMap: true
+      },
+      entry: join(__dirname, 'socket', 'api.ts'),
       environment: {
+        NODE_OPTIONS: '--enable-source-maps',
         CONNECTIONS_TABLE: connectionsTable.tableName,
-        SOCKET_URL: `https://${props.domainName}`
+        NOTIFICATIONS_TABLE: notificationsTable.tableName,
+        SOCKET_URL: `https://${props.domainName}`,
+        FROM_EMAIL: props.fromEmail,
+        TO_EMAIL: props.toEmail,
+        BASE_DOMAIN: props.emailDomain
       }
     }
 
@@ -109,15 +128,12 @@ export class NotificationsStack extends cdk.Stack {
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
 
     // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(
-      this,
+    const queueConsumerFunction = createQueueConsumer(this, {
       lambdaDefaults,
-      join(__dirname, 'consumer.ts'),
+      entry: join(__dirname, 'consumer.ts'),
       eventBus,
-      {
-        'services.assistant': ['content.generated']
-      }
-    )
+      sources: getSources()
+    })
     queueConsumerFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['execute-api:ManageConnections'],
@@ -125,7 +141,22 @@ export class NotificationsStack extends cdk.Stack {
       })
     )
 
+    // Permissions
+    queueConsumerFunction.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ses:SendEmail'],
+        resources: ['*'],
+        effect: iam.Effect.ALLOW,
+        conditions: {
+          StringEquals: {
+            'ses:FromAddress': props.fromEmail
+          }
+        }
+      })
+    )
+
     eventBus.grantPutEventsTo(queueConsumerFunction)
     connectionsTable.grantReadWriteData(queueConsumerFunction)
+    notificationsTable.grantReadWriteData(queueConsumerFunction)
   }
 }

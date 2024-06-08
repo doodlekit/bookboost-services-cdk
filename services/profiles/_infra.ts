@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
+import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import * as events from 'aws-cdk-lib/aws-events'
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
@@ -9,7 +9,7 @@ import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
 
-import { createApi, createQueueConsumer } from '../core/_infra'
+import { addRoute, createApi, createQueueConsumer } from '../core/_infra'
 
 interface ProfilesProps extends cdk.StackProps {
   eventBusName: string
@@ -42,44 +42,44 @@ export class ProfilesStack extends cdk.Stack {
       }
     }
 
-    const getProfileFunction = new NodejsFunction(this, 'GetProfileFunction', {
-      ...lambdaDefaults,
+    // API Gateway
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
+
+    addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/profile',
+      method: httpapi.HttpMethod.GET,
       entry: join(__dirname, 'api.ts'),
       handler: 'get'
     })
 
-    const updateProfileFunction = new NodejsFunction(this, 'UpdateProfileFunction', {
-      ...lambdaDefaults,
+    addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/profile',
+      method: httpapi.HttpMethod.PUT,
       entry: join(__dirname, 'api.ts'),
       handler: 'update'
     })
-
-    // API Gateway
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
-
-    const profileResource = api.root.addResource('profile')
-    profileResource.addMethod('GET', new apigw.LambdaIntegration(getProfileFunction, {}))
-    profileResource.addMethod('PUT', new apigw.LambdaIntegration(updateProfileFunction, {}))
 
     // Get the shared event bus
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
 
     // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(
-      this,
-      { ...lambdaDefaults, timeout: cdk.Duration.seconds(30), memorySize: 512 },
-      join(__dirname, 'consumer.ts'),
+    const queueConsumerFunction = createQueueConsumer(this, {
+      lambdaDefaults: { ...lambdaDefaults, timeout: cdk.Duration.seconds(30), memorySize: 512 },
+      entry: join(__dirname, 'consumer.ts'),
       eventBus,
-      {
+      sources: {
         'services.stripe': ['subscription.created']
       }
-    )
+    })
 
     eventBus.grantPutEventsTo(queueConsumerFunction)
   }

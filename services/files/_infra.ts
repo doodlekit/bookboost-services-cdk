@@ -4,14 +4,15 @@ import * as s3 from 'aws-cdk-lib/aws-s3'
 import * as cm from 'aws-cdk-lib/aws-certificatemanager'
 import * as route53 from 'aws-cdk-lib/aws-route53'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
+import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as events from 'aws-cdk-lib/aws-events'
+import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
-import { createApi, addResourcefulRoutes, createQueueConsumer } from '../core/_infra'
+import { createApi, addResourcefulRoutes, createQueueConsumer, addRoute } from '../core/_infra'
 
 interface FilesProps extends cdk.StackProps {
   eventBusName: string
@@ -37,13 +38,12 @@ export class FilesStack extends cdk.Stack {
     })
 
     // Files API Gateway
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
 
     // Defaults for lambda functions
     const lambdaDefaults: NodejsFunctionProps = {
@@ -59,9 +59,7 @@ export class FilesStack extends cdk.Stack {
     }
 
     // Create CRUD routes
-    const functions = addResourcefulRoutes({
-      stack: this,
-      api,
+    const functions = addResourcefulRoutes(this, api, {
       authorizer,
       lambdaDefaults,
       root: 'files',
@@ -74,18 +72,17 @@ export class FilesStack extends cdk.Stack {
       filesTable.grantReadWriteData(fn)
     })
 
-    // Function for creating a presigned s3 upload URL
-    const uploadRequestFunction = new NodejsFunction(this, 'UploadRequestFunction', {
-      ...lambdaDefaults,
+    const uploadRequestFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/files/upload',
+      method: httpapi.HttpMethod.PUT,
       entry: join(__dirname, 'presigned.ts'),
       handler: 'getUploadURL'
     })
 
     filesBucket.grantReadWrite(uploadRequestFunction)
     filesTable.grantReadWriteData(uploadRequestFunction)
-
-    const uploadRequestResource = api.root.resourceForPath('/files/upload')
-    uploadRequestResource.addMethod('PUT', new apigw.LambdaIntegration(uploadRequestFunction), {})
 
     // Get the shared event bus
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
@@ -96,15 +93,14 @@ export class FilesStack extends cdk.Stack {
     })
 
     // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(
-      this,
+    const queueConsumerFunction = createQueueConsumer(this, {
       lambdaDefaults,
-      join(__dirname, 'consumer.ts'),
+      entry: join(__dirname, 'consumer.ts'),
       eventBus,
-      {
+      sources: {
         'services.assistant': ['assistant.file.created', 'assistant.file.error']
       }
-    )
+    })
     filesTable.grantReadWriteData(queueConsumerFunction)
   }
 

@@ -14,7 +14,7 @@ const app = new cdk.App()
 const environment = app.node.tryGetContext('env') || 'dev'
 const busStack = new BusStack(app, `${environment}-BusStack`)
 const zoneName = 'bookboost.app'
-const domainRoot = environment === 'prod' ? zoneName : `rest.${environment}.${zoneName}`
+const domainRoot = environment === 'prod' ? zoneName : `${environment}.${zoneName}`
 const defaultProps = {
   env: {
     account: process.env.CDK_DEFAULT_ACCOUNT,
@@ -49,7 +49,10 @@ new StripeStack(app, `${environment}-StripeStack`, {
 })
 new NotificationsStack(app, `${environment}-NotificationsStack`, {
   ...defaultProps,
-  domainName: 'notifications.api.' + domainRoot
+  domainName: 'notifications.api.' + domainRoot,
+  fromEmail: `noreply@${zoneName}`,
+  emailDomain: zoneName,
+  toEmail: 'ben@doodlekit.com'
 })
 new AudiobooksStack(app, `${environment}-AudiobooksStack`, {
   ...defaultProps,

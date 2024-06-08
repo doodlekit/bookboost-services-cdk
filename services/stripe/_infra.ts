@@ -1,15 +1,16 @@
 import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
+import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
+import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
 
-import { createApi } from '../core/_infra'
+import { addRoute, createApi } from '../core/_infra'
 
 interface StripeProps extends cdk.StackProps {
   eventBusName: string
@@ -37,6 +38,14 @@ export class StripeStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 
+    // API Gateway
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
+
     // Defaults for lambda functions
     const lambdaDefaults: NodejsFunctionProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -56,43 +65,36 @@ export class StripeStack extends cdk.Stack {
       handler: 'handler'
     })
 
-    const createPortalSessionFunction = new NodejsFunction(this, 'CreatePortalSessionFunction', {
-      ...lambdaDefaults,
+    api.addRoutes({
+      path: '/webhoook',
+      methods: [httpapi.HttpMethod.POST],
+      integration: new HttpLambdaIntegration('WebhookFunctionIntegration', webhookFunction)
+    })
+
+    const createPortalSessionFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/portal/session',
+      method: httpapi.HttpMethod.POST,
       entry: join(__dirname, 'api.ts'),
       handler: 'createPortalSession'
     })
 
-    const getSubscriptionFunction = new NodejsFunction(this, 'GetSubscriptionFunction', {
-      ...lambdaDefaults,
+    const getSubscriptionFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/subscription',
+      method: httpapi.HttpMethod.POST,
       entry: join(__dirname, 'api.ts'),
-      handler: 'getSubscription'
+      handler: 'createSubscription'
     })
 
     subscriptionsTable.grantReadWriteData(getSubscriptionFunction)
     subscriptionsTable.grantReadWriteData(createPortalSessionFunction)
     subscriptionsTable.grantReadWriteData(webhookFunction)
 
-    // API Gateway
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
-
-    const stripeWebhookResource = api.root.addResource('webhook')
-    stripeWebhookResource.addMethod('POST', new apigw.LambdaIntegration(webhookFunction))
-
-    const sessionResource = api.root.addResource('portal').addResource('session')
-    sessionResource.addMethod('POST', new apigw.LambdaIntegration(createPortalSessionFunction))
-
-    const subscriptionResource = api.root.addResource('subscription')
-    subscriptionResource.addMethod('GET', new apigw.LambdaIntegration(getSubscriptionFunction))
-
     // Get the shared event bus
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
-
     eventBus.grantPutEventsTo(webhookFunction)
   }
 }

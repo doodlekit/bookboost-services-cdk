@@ -4,12 +4,12 @@ import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as iam from 'aws-cdk-lib/aws-iam'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
+import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
-import { createApi, addResourcefulRoutes, createQueueConsumer } from '../core/_infra'
+import { createApi, addResourcefulRoutes, createQueueConsumer, addRoute } from '../core/_infra'
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
-import { RestApi } from 'aws-cdk-lib/aws-apigateway'
+import { list } from '../admin/api'
 
 interface AudiobooksProps extends cdk.StackProps {
   eventBusName: string
@@ -40,13 +40,12 @@ export class AudiobooksStack extends cdk.Stack {
     })
 
     // Files API Gateway
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
 
     // Defaults for lambda functions
     const lambdaDefaults: NodejsFunctionProps = {
@@ -64,18 +63,14 @@ export class AudiobooksStack extends cdk.Stack {
     }
 
     // Create CRUD routes
-    const functions = addResourcefulRoutes({
-      stack: this,
-      api,
+    const functions = addResourcefulRoutes(this, api, {
       authorizer,
       lambdaDefaults,
       root: 'audiobooks',
       entry: join(__dirname, 'audiobooks', 'api.ts')
     })
 
-    const revisionsFunctions = addResourcefulRoutes({
-      stack: this,
-      api,
+    const revisionsFunctions = addResourcefulRoutes(this, api, {
       authorizer,
       lambdaDefaults,
       root: 'audiobooks/{audiobookId}/revisions',
@@ -88,15 +83,14 @@ export class AudiobooksStack extends cdk.Stack {
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
 
     // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(
-      this,
+    const queueConsumerFunction = createQueueConsumer(this, {
       lambdaDefaults,
-      join(__dirname, 'consumer.ts'),
+      entry: join(__dirname, 'consumer.ts'),
       eventBus,
-      {
+      sources: {
         'services.audiobooks': ['audio.created', 'audio.deleted', 'revision.created']
       }
-    )
+    })
 
     // Permissions
     queueConsumerFunction.addToRolePolicy(
@@ -129,62 +123,50 @@ export class AudiobooksStack extends cdk.Stack {
 function setupAdminFunctions(
   stack: cdk.Stack,
   lambdaDefaults: NodejsFunctionProps,
-  api: RestApi,
+  api: any,
   authorizer: any
 ) {
-  const adminListAudiobooksFunction = new NodejsFunction(stack, 'AdminListAudiobooksFunction', {
-    ...lambdaDefaults,
+  const listAudiobooksFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks',
+    method: httpapi.HttpMethod.GET,
     entry: join(__dirname, 'audiobooks', 'admin.ts'),
-    handler: 'list'
+    handler: 'list',
+    authorizationScopes: ['manage:users']
   })
-
-  const adminUpdateAudiobookFunction = new NodejsFunction(stack, 'AdminUpdateAudiobookFunction', {
-    ...lambdaDefaults,
+  const updateAudiobookFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks/{audiobookId}',
+    method: httpapi.HttpMethod.PUT,
     entry: join(__dirname, 'audiobooks', 'admin.ts'),
-    handler: 'update'
+    handler: 'update',
+    authorizationScopes: ['manage:users']
   })
-
-  const adminGetRevisionsFunction = new NodejsFunction(stack, 'AdminGetRevisionsFunction', {
-    ...lambdaDefaults,
+  const getRevisionsFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks/{audiobookId}/revisions',
+    method: httpapi.HttpMethod.GET,
     entry: join(__dirname, 'revisions', 'admin.ts'),
-    handler: 'get'
+    handler: 'get',
+    authorizationScopes: ['manage:users']
   })
-
-  const adminCreateRevisionFunction = new NodejsFunction(stack, 'AdminCreateRevisionFunction', {
-    ...lambdaDefaults,
+  const createRevisionFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks/{audiobookId}/revisions',
+    method: httpapi.HttpMethod.POST,
     entry: join(__dirname, 'revisions', 'admin.ts'),
-    handler: 'create'
+    handler: 'create',
+    authorizationScopes: ['manage:users']
   })
-
-  const adminAudiobooksResource = api.root.resourceForPath('/admin/{userId}/audiobooks')
-  const adminAudiobookResource = adminAudiobooksResource.addResource('{audiobookId}')
-  adminAudiobooksResource.addMethod(
-    'GET',
-    new apigw.LambdaIntegration(adminListAudiobooksFunction),
-    {}
-  )
-  adminAudiobookResource.addMethod(
-    'PUT',
-    new apigw.LambdaIntegration(adminUpdateAudiobookFunction),
-    {}
-  )
-
-  const adminRevisionsResource = adminAudiobookResource.addResource('revisions')
-  adminRevisionsResource.addMethod(
-    'GET',
-    new apigw.LambdaIntegration(adminGetRevisionsFunction),
-    {}
-  )
-  adminRevisionsResource.addMethod(
-    'POST',
-    new apigw.LambdaIntegration(adminCreateRevisionFunction),
-    {}
-  )
 
   return [
-    adminListAudiobooksFunction,
-    adminUpdateAudiobookFunction,
-    adminGetRevisionsFunction,
-    adminCreateRevisionFunction
+    listAudiobooksFunction,
+    updateAudiobookFunction,
+    getRevisionsFunction,
+    createRevisionFunction
   ]
 }

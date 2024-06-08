@@ -15,7 +15,7 @@ function getAuth0Client() {
   })
 }
 
-export async function getAll(event: any) {
+export async function list(event: any) {
   const perPage = event.queryStringParameters.per_page || 10
   const page = event.queryStringParameters.page || 0
   const query = event.queryStringParameters.query

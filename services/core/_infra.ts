@@ -2,12 +2,10 @@ import * as cdk from 'aws-cdk-lib'
 import * as cm from 'aws-cdk-lib/aws-certificatemanager'
 import * as route53 from 'aws-cdk-lib/aws-route53'
 import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
 import * as events from 'aws-cdk-lib/aws-events'
 import * as targets from 'aws-cdk-lib/aws-events-targets'
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers'
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
-import { Table } from 'aws-cdk-lib/aws-dynamodb'
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 import { Tracing } from 'aws-cdk-lib/aws-lambda'
 
@@ -22,39 +20,40 @@ import { Tracing } from 'aws-cdk-lib/aws-lambda'
  */
 export function createApi(
   stack: cdk.Stack,
-  zoneName: string,
-  domainName: string,
-  jwtIssuer: string,
-  jwtAudience: string
+  {
+    zoneName,
+    domainName,
+    jwtIssuer,
+    jwtAudience
+  }: {
+    zoneName: string
+    domainName: string
+    jwtIssuer: string
+    jwtAudience: string
+  }
 ) {
   const hostedZone = route53.HostedZone.fromLookup(stack, 'HostedZone', {
     domainName: zoneName
   })
-  const certificate = new cm.Certificate(stack, 'RestApiCertificate', {
+  const certificate = new cm.Certificate(stack, 'ApiCertificate', {
     domainName: domainName,
     validation: cm.CertificateValidation.fromDns(hostedZone)
   })
-  const domain = new httpapi.DomainName(stack, 'RestApiDomain', {
+  const domain = new httpapi.DomainName(stack, 'ApiDomain', {
     domainName: domainName,
     certificate
   })
-  const api = new apigw.RestApi(stack, `${stack.stackName}-RestApiGateway`, {
-    endpointTypes: [apigw.EndpointType.REGIONAL],
-    deploy: true,
-    deployOptions: {
-      stageName: 'prod',
-      tracingEnabled: true
+  const api = new httpapi.HttpApi(stack, `${stack.stackName}-ApiGateway`, {
+    corsPreflight: {
+      allowOrigins: ['*'],
+      allowMethods: [httpapi.CorsHttpMethod.ANY],
+      allowHeaders: ['Authorization', 'Content-Type']
     },
-    defaultCorsPreflightOptions: {
-      allowOrigins: apigw.Cors.ALL_ORIGINS,
-      allowMethods: apigw.Cors.ALL_METHODS
-    },
-    domainName: {
-      domainName: domain.name,
-      certificate: certificate
+    defaultDomainMapping: {
+      domainName: domain
     }
   })
-  const record = new route53.ARecord(stack, 'RestApiRecord', {
+  const record = new route53.ARecord(stack, 'ApiRecord', {
     zone: hostedZone,
     target: route53.RecordTarget.fromAlias({
       bind: () => ({
@@ -68,16 +67,6 @@ export function createApi(
     jwtAudience: [jwtAudience]
   })
   return { api, authorizer }
-}
-
-interface ResourcefulRoutesParams {
-  stack: cdk.Stack
-  api: apigw.RestApi
-  authorizer: any
-  lambdaDefaults: NodejsFunctionProps
-  root: string
-  entry: string
-  parent?: apigw.IResource
 }
 
 /**
@@ -104,44 +93,108 @@ interface ResourcefulRoutesParams {
  * @param entry Path to the entry source file for the lambda functions
  * @returns List of lambda functions created
  */
-export function addResourcefulRoutes(params: ResourcefulRoutesParams) {
-  const resources = params.api.root.resourceForPath('/' + params.root)
-  const resource = resources.addResource('{id}')
+export function addResourcefulRoutes(
+  stack: cdk.Stack,
+  api: httpapi.HttpApi,
+  {
+    authorizer,
+    lambdaDefaults,
+    root,
+    entry
+  }: {
+    authorizer: HttpJwtAuthorizer
+    lambdaDefaults: NodejsFunctionProps
+    root: string
+    entry: string
+  }
+) {
   const functions = ['List', 'Get', 'Create', 'Update', 'Destroy'].map((action) => {
-    const prefix = params.root
+    const prefix = root
       .replace(/\{.*?\}/, '')
       .split('/')
       .map(capitalizeFirstLetter)
       .join('')
     const name = `${prefix}${action}Function`
-    const fn = new NodejsFunction(params.stack, name, {
-      ...params.lambdaDefaults,
-      entry: params.entry,
+    const fn = new NodejsFunction(stack, name, {
+      ...lambdaDefaults,
+      entry: entry,
       handler: action.toLowerCase(),
-      tracing: Tracing.PASS_THROUGH
+      tracing: Tracing.ACTIVE
     })
-    const integrationParams = {}
+    let path = `/${root}`
+    let method = httpapi.HttpMethod.GET
     switch (action) {
-      case 'List':
-        resources.addMethod('GET', new apigw.LambdaIntegration(fn), integrationParams)
+      case 'Get':
+        path = `${path}/{id}`
         break
       case 'Create':
-        resources.addMethod('POST', new apigw.LambdaIntegration(fn), integrationParams)
-        break
-      case 'Get':
-        resource.addMethod('GET', new apigw.LambdaIntegration(fn), integrationParams)
+        method = httpapi.HttpMethod.POST
         break
       case 'Update':
-        resource.addMethod('PUT', new apigw.LambdaIntegration(fn), integrationParams)
+        path = `${path}/{id}`
+        method = httpapi.HttpMethod.PUT
         break
       case 'Destroy':
-        resource.addMethod('DELETE', new apigw.LambdaIntegration(fn), integrationParams)
+        path = `${path}/{id}`
+        method = httpapi.HttpMethod.DELETE
         break
     }
+    api.addRoutes({
+      path,
+      methods: [method],
+      integration: new HttpLambdaIntegration(`${name}Integration`, fn),
+      authorizer
+    })
     return fn
   })
 
   return functions
+}
+
+export function addRoute(
+  stack: cdk.Stack,
+  api: httpapi.HttpApi,
+  {
+    authorizer,
+    lambdaDefaults,
+    path,
+    method,
+    entry,
+    handler,
+    authorizationScopes
+  }: {
+    authorizer: HttpJwtAuthorizer
+    lambdaDefaults: NodejsFunctionProps
+    path: string
+    method: httpapi.HttpMethod
+    entry: string
+    handler: string
+    authorizationScopes?: string[]
+  }
+) {
+  const prefix = path
+    .replace(/\{.*?\}/g, '')
+    .split('/')
+    .map(capitalizeFirstLetter)
+    .join('')
+  const name = `${prefix}${capitalizeFirstLetter(handler)}`
+  const fn = new NodejsFunction(stack, `${name}Function`, {
+    ...lambdaDefaults,
+    entry,
+    handler
+  })
+  const routeParams: any = {
+    path,
+    methods: [method],
+    integration: new HttpLambdaIntegration(`${name}Integration`, fn),
+    authorizer
+  }
+  if (authorizationScopes) {
+    routeParams.authorizationScopes = authorizationScopes
+  }
+
+  api.addRoutes(routeParams)
+  return fn
 }
 
 /**
@@ -155,10 +208,17 @@ export function addResourcefulRoutes(params: ResourcefulRoutesParams) {
  */
 export function createQueueConsumer(
   stack: cdk.Stack,
-  lambdaDefaults: NodejsFunctionProps,
-  entry: string,
-  eventBus: events.IEventBus,
-  sources: { [key: string]: string[] }
+  {
+    lambdaDefaults,
+    entry,
+    eventBus,
+    sources
+  }: {
+    lambdaDefaults: NodejsFunctionProps
+    entry: string
+    eventBus: events.IEventBus
+    sources: { [key: string]: string[] }
+  }
 ) {
   // Queue consumer
   const queueConsumerFunction = new NodejsFunction(stack, 'QueueConsumerFunction', {

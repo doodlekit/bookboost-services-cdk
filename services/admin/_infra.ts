@@ -1,14 +1,14 @@
 import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
+import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
 
-import { createApi } from '../core/_infra'
+import { addRoute, createApi } from '../core/_infra'
 
 interface AdminProps extends cdk.StackProps {
   domainName: string
@@ -39,31 +39,32 @@ export class AdminStack extends cdk.Stack {
       }
     }
 
-    const getUsersFunction = new NodejsFunction(this, 'GetUsersFunction', {
-      ...lambdaDefaults,
-      entry: join(__dirname, 'api.ts'),
-      handler: 'getAll'
-    })
-
-    const getUserFunction = new NodejsFunction(this, 'GetUserFunction', {
-      ...lambdaDefaults,
-      entry: join(__dirname, 'api.ts'),
-      handler: 'get'
-    })
-
     // API Gateway
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
 
-    const routeParams = {}
-    const usersResource = api.root.addResource('users')
-    const userResource = usersResource.addResource('{id}')
-    usersResource.addMethod('GET', new apigw.LambdaIntegration(getUsersFunction), routeParams)
-    userResource.addMethod('GET', new apigw.LambdaIntegration(getUserFunction), routeParams)
+    addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/users',
+      method: httpapi.HttpMethod.GET,
+      entry: join(__dirname, 'api.ts'),
+      handler: 'list',
+      authorizationScopes: ['manage:users']
+    })
+
+    addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/users/{id}',
+      method: httpapi.HttpMethod.GET,
+      entry: join(__dirname, 'api.ts'),
+      handler: 'get',
+      authorizationScopes: ['manage:users']
+    })
   }
 }

@@ -2,7 +2,6 @@ import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as httpapi from 'aws-cdk-lib/aws-apigatewayv2'
-import * as apigw from 'aws-cdk-lib/aws-apigateway'
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as ssm from 'aws-cdk-lib/aws-ssm'
 import * as events from 'aws-cdk-lib/aws-events'
@@ -13,7 +12,8 @@ import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
 
-import { createApi, createQueueConsumer } from '../core/_infra'
+import { addRoute, createApi, createQueueConsumer } from '../core/_infra'
+import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers'
 
 interface AssistantProps extends cdk.StackProps {
   eventBusName: string
@@ -102,16 +102,23 @@ export class AssistantStack extends cdk.Stack {
     assistantsTable.grantReadWriteData(createChatSessionFunction)
     chatSessionsTable.grantReadWriteData(createChatSessionFunction)
 
-    const { api, authorizer } = createApi(
-      this,
-      props.zoneName,
-      props.domainName,
-      props.jwtIssuer,
-      props.jwtAudience
-    )
+    const { api, authorizer } = createApi(this, {
+      zoneName: props.zoneName,
+      domainName: props.domainName,
+      jwtIssuer: props.jwtIssuer,
+      jwtAudience: props.jwtAudience
+    })
 
-    const sessionsResource = api.root.addResource('sessions')
-    sessionsResource.addMethod('POST', new apigw.LambdaIntegration(createChatSessionFunction), {})
+    // API Gateway
+    api.addRoutes({
+      path: '/sessions',
+      methods: [httpapi.HttpMethod.POST],
+      integration: new HttpLambdaIntegration(
+        'CreateChatSessionFunctionIntegration',
+        createChatSessionFunction
+      ),
+      authorizer
+    })
 
     // Content generation
     const { createContentFunction, contentGenerationTable } = setupContentGeneration(
@@ -128,9 +135,8 @@ export class AssistantStack extends cdk.Stack {
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
 
     // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(
-      this,
-      {
+    const queueConsumerFunction = createQueueConsumer(this, {
+      lambdaDefaults: {
         ...lambdaDefaults,
         timeout: cdk.Duration.seconds(120),
         memorySize: 1024,
@@ -145,13 +151,13 @@ export class AssistantStack extends cdk.Stack {
           OPENAI_API_KEY: openaiApiKey
         }
       },
-      join(__dirname, 'consumer.ts'),
+      entry: join(__dirname, 'consumer.ts'),
       eventBus,
-      {
+      sources: {
         'services.files': ['file.created', 'file.updated', 'file.deleted'],
         'services.assistant': ['content.ready']
       }
-    )
+    })
 
     eventBus.grantPutEventsTo(queueConsumerFunction)
     eventBus.grantPutEventsTo(createContentFunction)
@@ -168,8 +174,8 @@ export class AssistantStack extends cdk.Stack {
 function setupContentGeneration(
   stack: cdk.Stack,
   props: AssistantProps,
-  api: apigw.RestApi,
-  authorizer: httpapi.IHttpRouteAuthorizer
+  api: httpapi.HttpApi,
+  authorizer: HttpJwtAuthorizer
 ) {
   const contentGenerationTable = new dynamodb.Table(stack, 'ContentGenerationTable', {
     partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
@@ -185,28 +191,28 @@ function setupContentGeneration(
     },
     entry: join(__dirname, 'content', 'api.ts')
   }
-  const createContentFunction = new NodejsFunction(stack, 'CreateContentFunction', {
-    ...lambdaDefaults,
+  const createContentFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/content',
+    method: httpapi.HttpMethod.POST,
+    entry: join(__dirname, 'content', 'api.ts'),
     handler: 'create'
   })
-  const getContentFunction = new NodejsFunction(stack, 'GetContentFunction', {
-    ...lambdaDefaults,
+  const getContentFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/content',
+    method: httpapi.HttpMethod.GET,
+    entry: join(__dirname, 'content', 'api.ts'),
     handler: 'get'
   })
-  const contentResource = api.root.addResource('content')
-  contentResource.addMethod('POST', new apigw.LambdaIntegration(createContentFunction), {})
-  contentResource.addMethod('GET', new apigw.LambdaIntegration(getContentFunction), {})
-
   contentGenerationTable.grantReadWriteData(createContentFunction)
   contentGenerationTable.grantReadData(getContentFunction)
   return { contentGenerationTable, createContentFunction, getContentFunction }
 }
 
-function setupPromptAdmin(
-  stack: cdk.Stack,
-  api: apigw.RestApi,
-  authorizer: httpapi.IHttpRouteAuthorizer
-) {
+function setupPromptAdmin(stack: cdk.Stack, api: httpapi.HttpApi, authorizer: HttpJwtAuthorizer) {
   const promptsTable = new dynamodb.Table(stack, 'PromptsTable', {
     partitionKey: { name: 'ContentType', type: dynamodb.AttributeType.STRING },
     removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -223,20 +229,26 @@ function setupPromptAdmin(
     tracing: lambda.Tracing.ACTIVE,
     environment: {
       PROMPT_TABLE: promptsTable.tableName
-    },
-    entry: join(__dirname, 'prompts', 'admin.ts')
+    }
   }
-  const updatePromptFunction = new NodejsFunction(stack, 'UpdatePromptFunction', {
-    ...lambdaDefaults,
+  const updatePromptFunction = addRoute(stack, api, {
+    authorizer,
+    authorizationScopes: ['manage:prompts'],
+    lambdaDefaults,
+    path: '/admin/prompts',
+    method: httpapi.HttpMethod.PUT,
+    entry: join(__dirname, 'prompts', 'admin.ts'),
     handler: 'update'
   })
-  const listPromptsFunction = new NodejsFunction(stack, 'ListPromptsFunction', {
-    ...lambdaDefaults,
+  const listPromptsFunction = addRoute(stack, api, {
+    authorizer,
+    authorizationScopes: ['manage:prompts'],
+    lambdaDefaults,
+    path: '/admin/prompts',
+    method: httpapi.HttpMethod.GET,
+    entry: join(__dirname, 'prompts', 'admin.ts'),
     handler: 'list'
   })
-  const promptsResource = api.root.resourceForPath('/admin/prompts')
-  promptsResource.addMethod('GET', new apigw.LambdaIntegration(listPromptsFunction), {})
-  promptsResource.addMethod('PUT', new apigw.LambdaIntegration(updatePromptFunction), {})
 
   promptsTable.grantReadWriteData(updatePromptFunction)
   promptsTable.grantReadData(listPromptsFunction)
@@ -245,8 +257,8 @@ function setupPromptAdmin(
 
 function setupAutogen(
   stack: cdk.Stack,
-  api: apigw.RestApi,
-  authorizer: httpapi.IHttpRouteAuthorizer,
+  api: httpapi.HttpApi,
+  authorizer: HttpJwtAuthorizer,
   assistantsTable: dynamodb.Table,
   contentGenerationTable: dynamodb.Table,
   promptsTable: dynamodb.Table
@@ -310,30 +322,38 @@ function setupAutogen(
     })
   )
 
-  const createAutogenFunction = new NodejsFunction(stack, 'CreateAutogenFunction', {
-    ...lambdaDefaults,
-    environment: {
-      AUTOGEN_TABLE: autogenTable.tableName,
-      SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
-      SCHEDULE_FUNCTION_ARN: autogenMailerFunction.functionArn,
-      ROLE_STRING: `arn:aws:iam::${stack.account}:role/*`
+  const createAutogenFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults: {
+      ...lambdaDefaults,
+      environment: {
+        AUTOGEN_TABLE: autogenTable.tableName,
+        SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
+        SCHEDULE_FUNCTION_ARN: autogenMailerFunction.functionArn,
+        ROLE_STRING: `arn:aws:iam::${stack.account}:role/*`
+      }
     },
+    path: '/autogen',
+    method: httpapi.HttpMethod.POST,
+    entry: join(__dirname, 'autogen', 'api.ts'),
     handler: 'create'
   })
-  const listAutogenFunction = new NodejsFunction(stack, 'ListAutogenFunction', {
-    ...lambdaDefaults,
+  const listAutogenFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/autogen',
+    method: httpapi.HttpMethod.GET,
+    entry: join(__dirname, 'autogen', 'api.ts'),
     handler: 'list'
   })
-  const deleteAutogenFunction = new NodejsFunction(stack, 'DeleteAutogenFunction', {
-    ...lambdaDefaults,
+  const deleteAutogenFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/autogen/{id}',
+    method: httpapi.HttpMethod.DELETE,
+    entry: join(__dirname, 'autogen', 'api.ts'),
     handler: 'destroy'
   })
-  const autogenResource = api.root.addResource('autogen')
-  autogenResource.addMethod('POST', new apigw.LambdaIntegration(createAutogenFunction), {})
-  autogenResource.addMethod('GET', new apigw.LambdaIntegration(listAutogenFunction), {})
-  const autogenIdResource = autogenResource.addResource('{id}')
-  autogenIdResource.addMethod('DELETE', new apigw.LambdaIntegration(deleteAutogenFunction), {})
-
   // Allow the lambda function to create schedules
   createAutogenFunction.addToRolePolicy(
     new iam.PolicyStatement({
@@ -376,8 +396,8 @@ function setupAutogen(
 
 function setupMetadata(
   stack: cdk.Stack,
-  api: apigw.RestApi,
-  authorizer: httpapi.IHttpRouteAuthorizer,
+  api: httpapi.HttpApi,
+  authorizer: HttpJwtAuthorizer,
   assistantsTable: dynamodb.Table
 ) {
   const metadataTable = new dynamodb.Table(stack, 'UserMetadataTable', {
@@ -396,18 +416,22 @@ function setupMetadata(
     },
     entry: join(__dirname, 'metadata', 'api.ts')
   }
-  const updateMetadataFunction = new NodejsFunction(stack, 'UpdateMetadataFunction', {
-    ...lambdaDefaults,
+  const updateMetadataFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/metadata',
+    method: httpapi.HttpMethod.PUT,
+    entry: join(__dirname, 'metadata', 'api.ts'),
     handler: 'update'
   })
-  const getMetadataFunction = new NodejsFunction(stack, 'GetMetadataFunction', {
-    ...lambdaDefaults,
+  const getMetadataFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/metadata',
+    method: httpapi.HttpMethod.GET,
+    entry: join(__dirname, 'metadata', 'api.ts'),
     handler: 'get'
   })
-  const metadataResource = api.root.addResource('metadata')
-  metadataResource.addMethod('PUT', new apigw.LambdaIntegration(updateMetadataFunction), {})
-  metadataResource.addMethod('GET', new apigw.LambdaIntegration(getMetadataFunction), {})
-
   metadataTable.grantReadWriteData(updateMetadataFunction)
   metadataTable.grantReadData(getMetadataFunction)
   assistantsTable.grantReadData(updateMetadataFunction)
