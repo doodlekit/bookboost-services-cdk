@@ -32,10 +32,11 @@ export const handler = async (event: EventBridgeEvent<any, any>) => {
       return await onFileDeleted(file)
     case 'content.ready':
       const generationResponse = await generate(message.content)
+      console.log('contentToGenerate', message.content.contentToGenerate)
       await publish('services.assistant', 'content.generated', {
         content: {
           user_id: message.content.userId,
-          content_type: message.contentToGenerate,
+          content_type: message.content.contentToGenerate,
           text_content: generationResponse
         }
       })

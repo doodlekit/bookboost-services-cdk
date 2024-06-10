@@ -1,12 +1,17 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
-import { DynamoDBDocumentClient, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb'
+import {
+  DynamoDBDocumentClient,
+  UpdateCommand,
+  QueryCommand,
+  QueryCommandInput
+} from '@aws-sdk/lib-dynamodb'
 import { GetCommand, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb'
 import { v4 as uuidv4 } from 'uuid'
 import * as AWSXray from 'aws-xray-sdk'
-// const client = AWSXray.captureAWSv3Client(new DynamoDBClient())
-const client = new DynamoDBClient()
+const client = AWSXray.captureAWSv3Client(new DynamoDBClient())
 const dynamo = DynamoDBDocumentClient.from(client)
 const tableName = process.env.NOTIFICATIONS_TABLE
+const indexName = process.env.NOTIFICATIONS_INDEX
 
 export const createNotification = async (userId: string, notificaton: any) => {
   const id = uuidv4()
@@ -22,6 +27,8 @@ export const createNotification = async (userId: string, notificaton: any) => {
         Read: false,
         Type: notificaton.type,
         Source: notificaton.source,
+        ObjectId: notificaton.object_id,
+        ObjectType: notificaton.object_type,
         CreatedAt: createdAt
       }
     })
@@ -34,38 +41,25 @@ export const createNotification = async (userId: string, notificaton: any) => {
   }
 }
 
-export const getNotifications = async (userId: string) => {
-  const response = await dynamo.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: 'UserId = :userId',
-      ExpressionAttributeValues: {
-        ':userId': userId
-      }
-    })
-  )
-  if (!response.Items) {
-    return []
-  }
-  return response.Items?.map(transformNotification)
-}
-
 export const getNotificationsPaginated = async (
   userId: string,
   limit: number,
   lastEvaluatedKey: any
 ) => {
-  const response = await dynamo.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: 'UserId = :userId',
-      ExpressionAttributeValues: {
-        ':userId': userId
-      },
-      Limit: limit,
-      ExclusiveStartKey: lastEvaluatedKey
-    })
-  )
+  const input: QueryCommandInput = {
+    TableName: tableName,
+    IndexName: indexName,
+    KeyConditionExpression: 'UserId = :userId',
+    ExpressionAttributeValues: {
+      ':userId': userId
+    },
+    Limit: limit,
+    ScanIndexForward: false
+  }
+  if (lastEvaluatedKey) {
+    input.ExclusiveStartKey = lastEvaluatedKey
+  }
+  const response = await dynamo.send(new QueryCommand(input))
   if (!response.Items) {
     return []
   }
@@ -84,7 +78,10 @@ export const markAsRead = async (userId: string, ids: string[]) => {
           UserId: userId,
           Id: id
         },
-        UpdateExpression: 'SET Read = :read',
+        UpdateExpression: 'SET #read = :read',
+        ExpressionAttributeNames: {
+          '#read': 'Read'
+        },
         ExpressionAttributeValues: {
           ':read': true
         }
@@ -98,24 +95,40 @@ export const markAllAsRead = async (userId: string) => {
   // Look through all pages using the LastEvaluatedKey
   let lastEvaluatedKey = null
   do {
-    const response: any = await dynamo.send(
-      new QueryCommand({
-        TableName: tableName,
-        KeyConditionExpression: 'UserId = :userId',
-        FilterExpression: 'Read = :read',
-        ExpressionAttributeValues: {
-          ':userId': userId,
-          ':read': false
-        },
-        ExclusiveStartKey: lastEvaluatedKey
-      })
-    )
+    const input: QueryCommandInput = {
+      TableName: tableName,
+      KeyConditionExpression: 'UserId = :userId',
+      FilterExpression: '#read = :read',
+      ExpressionAttributeNames: {
+        '#read': 'Read'
+      },
+      ExpressionAttributeValues: {
+        ':userId': userId,
+        ':read': false
+      }
+    }
+    if (lastEvaluatedKey) {
+      input.ExclusiveStartKey = lastEvaluatedKey
+    }
+    const response: any = await dynamo.send(new QueryCommand(input))
     if (response.Items) {
       const ids = response.Items.map((n: any) => n.Id)
       await markAsRead(userId, ids)
     }
     lastEvaluatedKey = response.LastEvaluatedKey
   } while (lastEvaluatedKey)
+}
+
+export const deleteNotification = async (userId: string, id: string) => {
+  await dynamo.send(
+    new DeleteCommand({
+      TableName: tableName,
+      Key: {
+        UserId: userId,
+        Id: id
+      }
+    })
+  )
 }
 
 const transformNotification = (notification: any) => {
@@ -125,6 +138,8 @@ const transformNotification = (notification: any) => {
     read: notification.Read,
     type: notification.Type,
     source: notification.Source,
+    object_id: notification.ObjectId,
+    object_type: notification.ObjectType,
     created_at: notification.CreatedAt
   }
 }

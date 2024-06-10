@@ -3,10 +3,14 @@ import {
   PostToConnectionCommand
 } from '@aws-sdk/client-apigatewaymanagementapi'
 import { getConnections } from '../socket/db'
+import { saveStatus } from '../status/db'
 const socketUrl = process.env.SOCKET_URL
 
 export const sendNotification = async (notification: any) => {
   console.log('Sending notification:', notification)
+  saveStatus(notification.user_id, {
+    has_unread: true
+  })
   // Alert frontend via socket connection that the content is in the DB
   const apiClient = new ApiGatewayManagementApiClient({
     endpoint: socketUrl

@@ -50,6 +50,7 @@ new StripeStack(app, `${environment}-StripeStack`, {
 new NotificationsStack(app, `${environment}-NotificationsStack`, {
   ...defaultProps,
   domainName: 'notifications.api.' + domainRoot,
+  socketDomainName: 'ws.' + domainRoot,
   fromEmail: `noreply@${zoneName}`,
   emailDomain: zoneName,
   toEmail: 'ben@doodlekit.com'

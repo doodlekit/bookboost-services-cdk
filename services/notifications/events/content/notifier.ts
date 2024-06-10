@@ -6,7 +6,7 @@ export default async function (source: string, eventType: string, body: any) {
   const userId = body.content.user_id
   // Save the event to the database
   const notification = await createNotification(userId, {
-    content: 'Content generated',
+    content: `New ${body.content.content_type} generated`,
     type: eventType,
     source: source
   })

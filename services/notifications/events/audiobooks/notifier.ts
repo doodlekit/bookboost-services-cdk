@@ -15,24 +15,28 @@ async function sendRevisionNotification(source: string, eventType: string, revis
   // Save the event to the database
   const userId = revision.user_id
   // Save the event to the database
-  const notification = await createNotification(userId, {
-    content: 'New audibook revision',
-    type: eventType,
-    source: source
-  })
   await sendRevisionEmail(revision)
-  await sendNotification(notification)
+  if (revision.type === 'RESPONSE') {
+    const notification = await createNotification(userId, {
+      content: 'New audibook revision',
+      type: eventType,
+      object_type: 'audiobook',
+      object_id: revision.audiobook_id,
+      source: source
+    })
+    await sendNotification(notification)
+  }
 }
 
 async function sendAudiobookNotification(source: string, eventType: string, audiobook: any) {
   // Save the event to the database
-  const userId = audiobook.user_id
+  // const userId = audiobook.user_id
   // Save the event to the database
-  const notification = await createNotification(userId, {
-    content: 'Audiobook created',
-    type: eventType,
-    source: source
-  })
+  // const notification = await createNotification(userId, {
+  //   content: 'Audiobook created',
+  //   type: eventType,
+  //   source: source
+  // })
   await sendAudiobookEmail(audiobook)
-  await sendNotification(notification)
+  // await sendNotification(notification)
 }

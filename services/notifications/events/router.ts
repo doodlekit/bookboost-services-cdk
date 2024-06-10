@@ -6,8 +6,8 @@ const events: any = {
     types: ['audiobook.created', 'revision.created'],
     notifier: AudiobookNotifier
   },
-  'services.content': {
-    types: ['content.created'],
+  'services.assistant': {
+    types: ['content.generated'],
     notifier: ContentNotifier
   }
 }
@@ -29,6 +29,5 @@ export function getSources() {
   for (const source in events) {
     sources[source] = events[source].types
   }
-  console.log('Sources:', sources)
   return sources
 }
