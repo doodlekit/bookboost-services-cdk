@@ -15,7 +15,10 @@ import { join } from 'path'
 import { addRoute, createApi, createQueueConsumer } from '../core/_infra'
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers'
 
+import { lambdaParams } from '../core/defaults'
+
 interface AssistantProps extends cdk.StackProps {
+  environment: string
   eventBusName: string
   domainName: string
   zoneName: string
@@ -31,24 +34,27 @@ export class AssistantStack extends cdk.Stack {
     const assistantsTable = new dynamodb.Table(this, 'AssistantsTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
     const chatSessionsTable = new dynamodb.Table(this, 'ChatSessionsTable', {
       partitionKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     })
     const locksTable = new dynamodb.Table(this, 'LocksTable', {
       partitionKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     })
 
-    const openaiApiKey = ssm.StringParameter.valueForStringParameter(this, 'Prod.OPENAI_API_KEY')
+    const openaiApiKey = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.OPENAI_API_KEY'
+    )
 
     // Defaults for lambda functions
-    const lambdaDefaults: NodejsFunctionProps = {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      timeout: cdk.Duration.seconds(5),
-      tracing: lambda.Tracing.ACTIVE,
+    const lambdaDefaults: NodejsFunctionProps = lambdaParams({
       environment: {
         EVENT_BUS: props.eventBusName,
         LOCKS_TABLE: locksTable.tableName,
@@ -56,7 +62,7 @@ export class AssistantStack extends cdk.Stack {
         CHAT_SESSIONS_TABLE: chatSessionsTable.tableName,
         OPENAI_API_KEY: openaiApiKey
       }
-    }
+    })
 
     const streamFunction = new NodejsFunction(this, 'StreamFunction', {
       ...lambdaDefaults,
@@ -128,8 +134,17 @@ export class AssistantStack extends cdk.Stack {
       authorizer
     )
     const { promptsTable } = setupPromptAdmin(this, api, authorizer)
-    const { metadataTable } = setupMetadata(this, api, authorizer, assistantsTable)
-    setupAutogen(this, api, authorizer, assistantsTable, contentGenerationTable, promptsTable)
+    const { metadataTable } = setupMetadata(this, api, authorizer, assistantsTable, openaiApiKey)
+    setupAutogen(
+      this,
+      api,
+      authorizer,
+      assistantsTable,
+      contentGenerationTable,
+      promptsTable,
+      props.eventBusName,
+      openaiApiKey
+    )
 
     // Get the shared event bus
     const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
@@ -179,18 +194,16 @@ function setupContentGeneration(
 ) {
   const contentGenerationTable = new dynamodb.Table(stack, 'ContentGenerationTable', {
     partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
+    billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     removalPolicy: cdk.RemovalPolicy.DESTROY
   })
-  const lambdaDefaults: NodejsFunctionProps = {
-    runtime: lambda.Runtime.NODEJS_20_X,
-    timeout: cdk.Duration.seconds(5),
-    tracing: lambda.Tracing.ACTIVE,
+  const lambdaDefaults: NodejsFunctionProps = lambdaParams({
     environment: {
       EVENT_BUS: props.eventBusName,
       CONTENT_GEN_TABLE: contentGenerationTable.tableName
     },
     entry: join(__dirname, 'content', 'api.ts')
-  }
+  })
   const createContentFunction = addRoute(stack, api, {
     authorizer,
     lambdaDefaults,
@@ -223,14 +236,11 @@ function setupPromptAdmin(stack: cdk.Stack, api: httpapi.HttpApi, authorizer: Ht
       compressionType: dynamodb.InputCompressionType.NONE
     }
   })
-  const lambdaDefaults: NodejsFunctionProps = {
-    runtime: lambda.Runtime.NODEJS_20_X,
-    timeout: cdk.Duration.seconds(5),
-    tracing: lambda.Tracing.ACTIVE,
+  const lambdaDefaults: NodejsFunctionProps = lambdaParams({
     environment: {
       PROMPT_TABLE: promptsTable.tableName
     }
-  }
+  })
   const updatePromptFunction = addRoute(stack, api, {
     authorizer,
     authorizationScopes: ['manage:prompts'],
@@ -261,33 +271,32 @@ function setupAutogen(
   authorizer: HttpJwtAuthorizer,
   assistantsTable: dynamodb.Table,
   contentGenerationTable: dynamodb.Table,
-  promptsTable: dynamodb.Table
+  promptsTable: dynamodb.Table,
+  eventBusName: string,
+  openaiApiKey: string
 ) {
   const autogenTable = new dynamodb.Table(stack, 'AutogenTable', {
     partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
     sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+    billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     removalPolicy: cdk.RemovalPolicy.RETAIN
   })
 
-  const lambdaDefaults: NodejsFunctionProps = {
-    runtime: lambda.Runtime.NODEJS_20_X,
-    tracing: lambda.Tracing.ACTIVE,
-    timeout: cdk.Duration.seconds(5),
+  const lambdaDefaults: NodejsFunctionProps = lambdaParams({
     environment: {
       AUTOGEN_TABLE: autogenTable.tableName
     },
     entry: join(__dirname, 'autogen', 'api.ts')
-  }
+  })
 
-  const openaiApiKey = ssm.StringParameter.valueForStringParameter(stack, 'Prod.OPENAI_API_KEY')
-
-  const autogenMailerFunction = new NodejsFunction(stack, 'AutogenMailerFunction', {
+  const autogenConsumerFunction = new NodejsFunction(stack, 'AutogenConsumerFunction', {
     ...lambdaDefaults,
     timeout: cdk.Duration.seconds(120),
     memorySize: 1024,
-    entry: join(__dirname, 'autogen', 'mailer.ts'),
+    entry: join(__dirname, 'autogen', 'consumer.ts'),
     handler: 'handler',
     environment: {
+      EVENT_BUS: eventBusName,
       OPENAI_API_KEY: openaiApiKey,
       AUTOGEN_TABLE: autogenTable.tableName,
       ASSISTANTS_TABLE: assistantsTable.tableName,
@@ -296,7 +305,7 @@ function setupAutogen(
     }
   })
 
-  // Allow the scheduler to invoke the mailer lambda function
+  // Allow the scheduler to invoke the consumer lambda function
   const schedulerRole = new iam.Role(stack, 'schedulerRole', {
     assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com')
   })
@@ -305,7 +314,7 @@ function setupAutogen(
       statements: [
         new iam.PolicyStatement({
           actions: ['lambda:InvokeFunction'],
-          resources: [autogenMailerFunction.functionArn],
+          resources: [autogenConsumerFunction.functionArn],
           effect: iam.Effect.ALLOW
         })
       ]
@@ -314,13 +323,7 @@ function setupAutogen(
 
   schedulerRole.attachInlinePolicy(invokeLambdaPolicy)
 
-  autogenMailerFunction.addToRolePolicy(
-    new iam.PolicyStatement({
-      actions: ['ses:SendEmail', 'SES:SendRawEmail'],
-      resources: ['*'],
-      effect: iam.Effect.ALLOW
-    })
-  )
+  const eventBus = events.EventBus.fromEventBusName(stack, 'AutogenEventBus', eventBusName)
 
   const createAutogenFunction = addRoute(stack, api, {
     authorizer,
@@ -329,7 +332,7 @@ function setupAutogen(
       environment: {
         AUTOGEN_TABLE: autogenTable.tableName,
         SCHEDULE_ROLE_ARN: schedulerRole.roleArn,
-        SCHEDULE_FUNCTION_ARN: autogenMailerFunction.functionArn,
+        SCHEDULE_FUNCTION_ARN: autogenConsumerFunction.functionArn,
         ROLE_STRING: `arn:aws:iam::${stack.account}:role/*`
       }
     },
@@ -386,10 +389,12 @@ function setupAutogen(
   autogenTable.grantReadData(listAutogenFunction)
   autogenTable.grantReadWriteData(deleteAutogenFunction)
 
-  autogenTable.grantReadWriteData(autogenMailerFunction)
-  assistantsTable.grantReadData(autogenMailerFunction)
-  contentGenerationTable.grantReadWriteData(autogenMailerFunction)
-  promptsTable.grantReadData(autogenMailerFunction)
+  autogenTable.grantReadWriteData(autogenConsumerFunction)
+  assistantsTable.grantReadData(autogenConsumerFunction)
+  contentGenerationTable.grantReadWriteData(autogenConsumerFunction)
+  promptsTable.grantReadData(autogenConsumerFunction)
+
+  eventBus.grantPutEventsTo(autogenConsumerFunction)
 
   return { autogenTable }
 }
@@ -398,24 +403,22 @@ function setupMetadata(
   stack: cdk.Stack,
   api: httpapi.HttpApi,
   authorizer: HttpJwtAuthorizer,
-  assistantsTable: dynamodb.Table
+  assistantsTable: dynamodb.Table,
+  openaiApiKey: string
 ) {
   const metadataTable = new dynamodb.Table(stack, 'UserMetadataTable', {
     partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
+    billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     removalPolicy: cdk.RemovalPolicy.RETAIN
   })
-  const openaiApiKey = ssm.StringParameter.valueForStringParameter(stack, 'Prod.OPENAI_API_KEY')
-  const lambdaDefaults: NodejsFunctionProps = {
-    runtime: lambda.Runtime.NODEJS_20_X,
-    timeout: cdk.Duration.seconds(5),
-    tracing: lambda.Tracing.ACTIVE,
+  const lambdaDefaults: NodejsFunctionProps = lambdaParams({
     environment: {
       OPENAI_API_KEY: openaiApiKey,
       USER_METADATA_TABLE: metadataTable.tableName,
       ASSISTANTS_TABLE: assistantsTable.tableName
     },
     entry: join(__dirname, 'metadata', 'api.ts')
-  }
+  })
   const updateMetadataFunction = addRoute(stack, api, {
     authorizer,
     lambdaDefaults,

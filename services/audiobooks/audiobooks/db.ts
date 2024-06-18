@@ -7,6 +7,13 @@ const client = AWSXray.captureAWSv3Client(new DynamoDBClient())
 const dynamo = DynamoDBDocumentClient.from(client)
 
 import {
+  pascalToSnakeKeys,
+  getUpdateExpression,
+  getExpressionAttributeValues,
+  getExpressionAttributeNames
+} from '../../core/db'
+
+import {
   DeleteCommand,
   GetCommand,
   PutCommand,
@@ -14,6 +21,7 @@ import {
   UpdateCommand
 } from '@aws-sdk/lib-dynamodb'
 import { v4 as uuidv4 } from 'uuid'
+import { State } from 'aws-cdk-lib/aws-stepfunctions'
 
 const tableName = process.env.AUDIOBOOKS_TABLE
 
@@ -72,36 +80,15 @@ export const createAudiobook = async (userId: string, audiobook: any) => {
 
 export const updateAudiobook = async (userId: string, id: string, audiobook: any) => {
   const record: any = {
-    UpdatedAt: new Date().toISOString()
+    UpdatedAt: new Date().toISOString(),
+    State: audiobook.state,
+    SampleUrl: audiobook.sample_url,
+    FinalUrl: audiobook.final_url
   }
-  if (audiobook.state) {
-    record.State = audiobook.state
-  }
-  if (audiobook.sample_url) {
-    record.SampleUrl = audiobook.sample_url
-  }
-  if (audiobook.final_url) {
-    record.FinalUrl = audiobook.final_url
-  }
-  const updateExpression = Object.keys(record)
-    .map((i: any) => `#${i} = :value${i}`)
-    .join(', ')
-  const expressionAttributeValues = Object.keys(record).reduce(
-    (acc: any, i: any) => ({
-      ...acc,
-      [`:value${i}`]: record[i]
-    }),
-    {}
-  )
 
-  const expressionAttributeNames = Object.keys(record).reduce(
-    (acc: any, i: any) => ({
-      ...acc,
-      [`#${i}`]: i
-    }),
-    {}
-  )
-
+  const updateExpression = getUpdateExpression(record)
+  const expressionAttributeValues = getExpressionAttributeValues(record)
+  const expressionAttributeNames = getExpressionAttributeNames(record)
   console.log('updateExpression', updateExpression)
   console.log('expressionAttributeValues', expressionAttributeValues)
   console.log('expressionAttributeNames', expressionAttributeNames)
@@ -132,16 +119,4 @@ export const deleteAudiobook = async (userId: string, id: string) => {
   }
   console.log('deleteInput', deleteInput)
   await dynamo.send(new DeleteCommand(deleteInput))
-}
-
-const pascalToSnakeKeys = (obj: any) => {
-  const newObj: any = {}
-  for (const key in obj) {
-    const newKey = key
-      .split(/\.?(?=[A-Z])/)
-      .join('_')
-      .toLowerCase()
-    newObj[newKey] = obj[key]
-  }
-  return newObj
 }

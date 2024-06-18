@@ -7,7 +7,7 @@ const events: any = {
     notifier: AudiobookNotifier
   },
   'services.assistant': {
-    types: ['content.generated'],
+    types: ['content.generated', 'scheduled.content.generated'],
     notifier: ContentNotifier
   }
 }

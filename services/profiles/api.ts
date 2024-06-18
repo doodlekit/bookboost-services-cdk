@@ -1,4 +1,5 @@
 import { ManagementClient } from 'auth0'
+import { publish } from '../core/messages'
 
 const auth0Domain = process.env.AUTH0_DOMAIN
 const clientId = process.env.AUTH0_CLIENT_ID
@@ -19,7 +20,11 @@ export async function update(event: any) {
 
   const params = { id: userId }
   const data = await transform(userId, userMetadata)
-  await management.users.update(params, data)
+  const response = await management.users.update(params, data)
+  const user = response.data
+  await publish('services.profiles', 'profile.updated', {
+    user
+  })
   return {
     statusCode: 200,
     body: 'User metadata updated successfully'
@@ -75,5 +80,26 @@ export async function get(event: any) {
   return {
     statusCode: 200,
     body: JSON.stringify(user.data)
+  }
+}
+
+export async function sendVerificationEmail(event: any) {
+  if (!auth0Domain || !clientId || !clientSecret) {
+    throw new Error('Auth0 environment variables not set')
+  }
+
+  const userId = event.requestContext.authorizer.jwt.claims.sub
+
+  const management = new ManagementClient({
+    domain: auth0Domain,
+    clientId: clientId,
+    clientSecret: clientSecret
+  })
+
+  const response = await management.jobs.verifyEmail({ user_id: userId })
+  console.log('Verification email sent:', response)
+  return {
+    statusCode: 200,
+    body: 'Verification email sent'
   }
 }

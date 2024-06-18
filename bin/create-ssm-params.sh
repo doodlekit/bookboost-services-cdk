@@ -1,0 +1,9 @@
+aws ssm put-parameter --name "dev.AUTH0_CLIENT_ID" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.AUTH0_CLIENT_SECRET" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.AUTH0_DOMAIN" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.OPENAI_API_KEY" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.STRIPE_ENDPOINT_SECRET" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.STRIPE_SECRET_KEY" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.TWILIO_SID" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.TWILIO_TOKEN" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.TWILIO_NUMBER" --value "" --type String --profile group49

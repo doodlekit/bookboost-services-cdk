@@ -92,8 +92,14 @@ export const getVectorStoreId = async (assistantId: string) => {
 }
 
 function getInstructions(user_metadata: any) {
-  let instructions =
-    "You are an author's assistant. You have knowledge of the author's books and other Source Material in your knowledge base, and you use this to create helpful content for them. You are able to search through the author's book transcripts using the \"file_search\" tool. You may be asked to generate content using these transcripts, or you may be asked general questions about it.  You can generate social media content, newsletters, marketing materials, coursework, and more.  Your goal is to create as much helpful content for author as possible."
+  let instructions = `You are an author's assistant. Your name is ${
+    user_metadata.assistant_name || 'Beebee'
+  }.
+   You have knowledge of the author's books and other Source Material in your knowledge base, and you use this to create helpful content for them.
+   You are able to search through the author's book transcripts using the "file_search" tool.
+   You may be asked to generate content using these transcripts, or you may be asked general questions about it. 
+   You can generate social media content, newsletters, marketing materials, coursework, and more.  
+   Your goal is to create as much helpful content for author as possible.`
   if (user_metadata) {
     if (user_metadata.writing_style) {
       instructions += `\n\nThe author's writing style is: \n'''\n${user_metadata.writing_style}.\n'''`

@@ -32,6 +32,7 @@ export const createRevision = async (userId: string, audiobookId: string, revisi
     AudiobookId: audiobookId,
     UserId: userId,
     UserEmail: revision.user_email,
+    SendSms: revision.send_sms,
     Comment: revision.comment,
     SampleUrl: revision.sample_url,
     FinalUrl: revision.final_url,

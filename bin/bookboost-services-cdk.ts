@@ -9,6 +9,7 @@ import { ProfilesStack } from '../services/profiles/_infra'
 import { StripeStack } from '../services/stripe/_infra'
 import { NotificationsStack } from '../services/notifications/_infra'
 import { AudiobooksStack } from '../services/audiobooks/_infra'
+import { env } from 'process'
 
 const app = new cdk.App()
 const environment = app.node.tryGetContext('env') || 'dev'
@@ -20,10 +21,15 @@ const defaultProps = {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION
   },
+  environment: environment,
   eventBusName: busStack.eventBusName,
   zoneName: zoneName,
-  jwtIssuer: 'https://auth.bookboost.app/',
+  jwtIssuer: 'https://dev-3fm8oskitszcaacq.us.auth0.com/',
   jwtAudience: 'https://a8sh3eh6pj.execute-api.us-east-2.amazonaws.com'
+}
+if (environment === 'prod') {
+  defaultProps.jwtAudience = 'https://api.bookboost.app/'
+  defaultProps.jwtIssuer = 'https://auth.bookboost.app/'
 }
 new FilesStack(app, `${environment}-FilesStack`, {
   ...defaultProps,

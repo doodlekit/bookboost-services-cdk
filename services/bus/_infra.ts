@@ -11,8 +11,8 @@ export class BusStack extends cdk.Stack {
     super(scope, id)
 
     // Create an EventBridge event bus
-    const eventBus = new events.EventBus(this, 'FileEventBus', {
-      eventBusName: `${this.stackName}-FileEventBus`
+    const eventBus = new events.EventBus(this, 'EventBus', {
+      eventBusName: `${this.stackName}-EventBus`
     })
 
     const group = new LogGroup(this, 'group', {

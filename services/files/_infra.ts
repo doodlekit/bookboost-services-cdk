@@ -34,6 +34,7 @@ export class FilesStack extends cdk.Stack {
     const filesTable = new dynamodb.Table(this, 'FilesTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 

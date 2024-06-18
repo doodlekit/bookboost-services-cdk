@@ -1,5 +1,5 @@
 import { EventBridgeEvent } from 'aws-lambda/trigger/eventbridge'
-import { routeEvent } from './events/router'
+import { routeEvent } from './router'
 const socketUrl = process.env.SOCKET_URL
 
 export const handler = async (event: EventBridgeEvent<any, any>) => {

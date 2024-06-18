@@ -11,8 +11,10 @@ import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-node
 import { join } from 'path'
 
 import { addRoute, createApi } from '../core/_infra'
+import { lambdaParams } from '../core/defaults'
 
 interface StripeProps extends cdk.StackProps {
+  environment: string
   eventBusName: string
   domainName: string
   zoneName: string
@@ -25,16 +27,17 @@ export class StripeStack extends cdk.Stack {
     super(scope, id, props)
     const stripeSecretKey = ssm.StringParameter.valueForStringParameter(
       this,
-      'Prod.STRIPE_SECRET_KEY'
+      props.environment + '.STRIPE_SECRET_KEY'
     )
     const stripeEndpointSecret = ssm.StringParameter.valueForStringParameter(
       this,
-      'Prod.STRIPE_ENDPOINT_SECRET'
+      props.environment + '.STRIPE_ENDPOINT_SECRET'
     )
 
     const subscriptionsTable = new dynamodb.Table(this, 'SubscriptionsTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 
@@ -47,17 +50,14 @@ export class StripeStack extends cdk.Stack {
     })
 
     // Defaults for lambda functions
-    const lambdaDefaults: NodejsFunctionProps = {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      timeout: cdk.Duration.seconds(5),
-      tracing: lambda.Tracing.ACTIVE,
+    const lambdaDefaults: NodejsFunctionProps = lambdaParams({
       environment: {
         EVENT_BUS: props.eventBusName,
         SUBSCRIPTIONS_TABLE: subscriptionsTable.tableName,
         STRIPE_SECRET_KEY: stripeSecretKey,
         STRIPE_ENDPOINT_SECRET: stripeEndpointSecret
       }
-    }
+    })
 
     const webhookFunction = new NodejsFunction(this, 'WebhookFunction', {
       ...lambdaDefaults,
@@ -66,7 +66,7 @@ export class StripeStack extends cdk.Stack {
     })
 
     api.addRoutes({
-      path: '/webhoook',
+      path: '/webhook',
       methods: [httpapi.HttpMethod.POST],
       integration: new HttpLambdaIntegration('WebhookFunctionIntegration', webhookFunction)
     })
@@ -84,9 +84,9 @@ export class StripeStack extends cdk.Stack {
       authorizer,
       lambdaDefaults,
       path: '/subscription',
-      method: httpapi.HttpMethod.POST,
+      method: httpapi.HttpMethod.GET,
       entry: join(__dirname, 'api.ts'),
-      handler: 'createSubscription'
+      handler: 'getSubscription'
     })
 
     subscriptionsTable.grantReadWriteData(getSubscriptionFunction)

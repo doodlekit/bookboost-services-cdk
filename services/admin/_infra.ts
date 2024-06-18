@@ -11,6 +11,7 @@ import { join } from 'path'
 import { addRoute, createApi } from '../core/_infra'
 
 interface AdminProps extends cdk.StackProps {
+  environment: string
   domainName: string
   zoneName: string
   jwtIssuer: string
@@ -20,12 +21,18 @@ interface AdminProps extends cdk.StackProps {
 export class AdminStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AdminProps) {
     super(scope, id, props)
-    const auth0ClientId = ssm.StringParameter.valueForStringParameter(this, 'Prod.AUTH0_CLIENT_ID')
+    const auth0ClientId = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.AUTH0_CLIENT_ID'
+    )
     const auth0ClientSecret = ssm.StringParameter.valueForStringParameter(
       this,
-      'Prod.AUTH0_CLIENT_SECRET'
+      props.environment + '.AUTH0_CLIENT_SECRET'
     )
-    const auth0Domain = ssm.StringParameter.valueForStringParameter(this, 'Prod.AUTH0_DOMAIN')
+    const auth0Domain = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.AUTH0_DOMAIN'
+    )
 
     // Defaults for lambda functions
     const lambdaDefaults: NodejsFunctionProps = {

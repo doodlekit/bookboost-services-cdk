@@ -18,8 +18,13 @@ function getTextBody(revision: any) {
   `
 }
 
+function getSmsBody(revision: any) {
+  return `Update to your audiobook available: https://${process.env.BASE_DOMAIN}/audiobooks`
+}
+
 export default {
   getSubject,
   getHtmlBody,
-  getTextBody
+  getTextBody,
+  getSmsBody
 }

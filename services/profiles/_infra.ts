@@ -10,8 +10,10 @@ import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-node
 import { join } from 'path'
 
 import { addRoute, createApi, createQueueConsumer } from '../core/_infra'
+import { lambdaParams } from '../core/defaults'
 
 interface ProfilesProps extends cdk.StackProps {
+  environment: string
   eventBusName: string
   domainName: string
   zoneName: string
@@ -22,25 +24,28 @@ interface ProfilesProps extends cdk.StackProps {
 export class ProfilesStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ProfilesProps) {
     super(scope, id, props)
-    const auth0ClientId = ssm.StringParameter.valueForStringParameter(this, 'Prod.AUTH0_CLIENT_ID')
+    const auth0ClientId = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.AUTH0_CLIENT_ID'
+    )
     const auth0ClientSecret = ssm.StringParameter.valueForStringParameter(
       this,
-      'Prod.AUTH0_CLIENT_SECRET'
+      props.environment + '.AUTH0_CLIENT_SECRET'
     )
-    const auth0Domain = ssm.StringParameter.valueForStringParameter(this, 'Prod.AUTH0_DOMAIN')
+    const auth0Domain = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.AUTH0_DOMAIN'
+    )
 
     // Defaults for lambda functions
-    const lambdaDefaults: NodejsFunctionProps = {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      timeout: cdk.Duration.seconds(5),
-      tracing: lambda.Tracing.ACTIVE,
+    const lambdaDefaults: NodejsFunctionProps = lambdaParams({
       environment: {
         EVENT_BUS: props.eventBusName,
         AUTH0_CLIENT_ID: auth0ClientId,
         AUTH0_CLIENT_SECRET: auth0ClientSecret,
         AUTH0_DOMAIN: auth0Domain
       }
-    }
+    })
 
     // API Gateway
     const { api, authorizer } = createApi(this, {
@@ -59,13 +64,22 @@ export class ProfilesStack extends cdk.Stack {
       handler: 'get'
     })
 
-    addRoute(this, api, {
+    const updateProfileFunction = addRoute(this, api, {
       authorizer,
       lambdaDefaults,
       path: '/profile',
       method: httpapi.HttpMethod.PUT,
       entry: join(__dirname, 'api.ts'),
       handler: 'update'
+    })
+
+    addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/profile/send-verification-email',
+      method: httpapi.HttpMethod.POST,
+      entry: join(__dirname, 'api.ts'),
+      handler: 'sendVerificationEmail'
     })
 
     // Get the shared event bus
@@ -82,5 +96,6 @@ export class ProfilesStack extends cdk.Stack {
     })
 
     eventBus.grantPutEventsTo(queueConsumerFunction)
+    eventBus.grantPutEventsTo(updateProfileFunction)
   }
 }

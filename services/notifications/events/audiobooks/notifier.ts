@@ -1,6 +1,9 @@
+import { getProfile } from '../../profiles/db'
+import { sendMessage } from '../../sms'
 import { createNotification } from '../db'
 import { sendNotification } from '../push'
 import { sendAudiobookEmail, sendRevisionEmail } from './mailer'
+import revesionTemplate from './templates/revision-response'
 
 export default async function (source: string, eventType: string, body: any) {
   console.log('Event received:', source, eventType, body)
@@ -14,6 +17,7 @@ export default async function (source: string, eventType: string, body: any) {
 async function sendRevisionNotification(source: string, eventType: string, revision: any) {
   // Save the event to the database
   const userId = revision.user_id
+  const profile = await getProfile(userId)
   // Save the event to the database
   await sendRevisionEmail(revision)
   if (revision.type === 'RESPONSE') {
@@ -25,6 +29,9 @@ async function sendRevisionNotification(source: string, eventType: string, revis
       source: source
     })
     await sendNotification(notification)
+    if (revision.send_sms && profile && profile.phone) {
+      await sendMessage(profile.phone, revesionTemplate.getSmsBody(revision))
+    }
   }
 }
 

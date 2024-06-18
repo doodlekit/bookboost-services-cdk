@@ -7,6 +7,7 @@ import * as route53 from 'aws-cdk-lib/aws-route53'
 import * as cm from 'aws-cdk-lib/aws-certificatemanager'
 import * as iam from 'aws-cdk-lib/aws-iam'
 import * as events from 'aws-cdk-lib/aws-events'
+import * as ssm from 'aws-cdk-lib/aws-ssm'
 import { WebSocketLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 
 import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
@@ -17,6 +18,7 @@ import { getSources } from './events/router'
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers'
 
 interface NotificationsProps extends cdk.StackProps {
+  environment: string
   eventBusName: string
   domainName: string
   socketDomainName: string
@@ -42,6 +44,7 @@ export class NotificationsStack extends cdk.Stack {
     const notificationsTable = new dynamodb.Table(this, 'NotificationsTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY
     })
 
@@ -54,6 +57,11 @@ export class NotificationsStack extends cdk.Stack {
     })
 
     const notificationStatusTable = new dynamodb.Table(this, 'NotificationStatusTable', {
+      partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    })
+
+    const notificationProfilesTable = new dynamodb.Table(this, 'NotificationProfilesTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY
     })
@@ -74,6 +82,7 @@ export class NotificationsStack extends cdk.Stack {
         NOTIFICATIONS_TABLE: notificationsTable.tableName,
         NOTIFICATIONS_INDEX: indexName,
         STATUS_TABLE: notificationStatusTable.tableName,
+        PROFILES_TABLE: notificationProfilesTable.tableName,
         SOCKET_URL: `https://${props.socketDomainName}`,
         FROM_EMAIL: props.fromEmail,
         TO_EMAIL: props.toEmail,
@@ -92,17 +101,20 @@ export class NotificationsStack extends cdk.Stack {
     const notificationFunctions = this.setupNotificationsApi(api, authorizer, lambdaDefaults)
     const statusFunctions = this.setupStatusApi(api, authorizer, lambdaDefaults)
 
-    const { queueConsumerFunction } = this.setupQueueConsumer(props, lambdaDefaults)
+    const { notificationConsumerFunction } = this.setupNotificationConsumer(props, lambdaDefaults)
+    const { profilesConsumerFunction } = this.setupProfiles(props, lambdaDefaults)
 
-    connectionsTable.grantReadWriteData(queueConsumerFunction)
-    notificationsTable.grantReadWriteData(queueConsumerFunction)
-    notificationStatusTable.grantReadWriteData(queueConsumerFunction)
+    connectionsTable.grantReadWriteData(notificationConsumerFunction)
+    notificationsTable.grantReadWriteData(notificationConsumerFunction)
+    notificationStatusTable.grantReadWriteData(notificationConsumerFunction)
     notificationFunctions.forEach((fn) => {
       notificationsTable.grantReadWriteData(fn)
     })
     statusFunctions.forEach((fn) => {
       notificationStatusTable.grantReadWriteData(fn)
     })
+    notificationProfilesTable.grantReadWriteData(profilesConsumerFunction)
+    notificationProfilesTable.grantReadData(notificationConsumerFunction)
   }
 
   private setupNotificationsApi(
@@ -178,20 +190,45 @@ export class NotificationsStack extends cdk.Stack {
     return [updateFunction, getFunction]
   }
 
-  private setupQueueConsumer(
+  private setupNotificationConsumer(
     props: NotificationsProps,
     lambdaDefaults: cdk.aws_lambda_nodejs.NodejsFunctionProps
   ) {
-    const eventBus = events.EventBus.fromEventBusName(this, 'EventBus', props.eventBusName)
+    const twilioAccountSid = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.TWILIO_SID'
+    )
+    const twilioToken = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.TWILIO_TOKEN'
+    )
+    const twilioNumber = ssm.StringParameter.valueForStringParameter(
+      this,
+      props.environment + '.TWILIO_NUMBER'
+    )
+    const eventBus = events.EventBus.fromEventBusName(
+      this,
+      'NotificationsEventBus',
+      props.eventBusName
+    )
 
-    // Queue consumer
-    const queueConsumerFunction = createQueueConsumer(this, {
-      lambdaDefaults,
-      entry: join(__dirname, 'consumer.ts'),
+    const notificationConsumerFunction = createQueueConsumer(this, {
+      lambdaDefaults: {
+        ...lambdaDefaults,
+        environment: {
+          ...lambdaDefaults.environment,
+          TWILIO_SID: twilioAccountSid,
+          TWILIO_TOKEN: twilioToken,
+          TWILIO_NUMBER: twilioNumber
+        },
+        timeout: cdk.Duration.seconds(60),
+        memorySize: 1024
+      },
+      entry: join(__dirname, 'events', 'consumer.ts'),
       eventBus,
       sources: getSources()
     })
-    queueConsumerFunction.addToRolePolicy(
+    notificationConsumerFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['execute-api:ManageConnections'],
         resources: ['*']
@@ -199,7 +236,7 @@ export class NotificationsStack extends cdk.Stack {
     )
 
     // Permissions
-    queueConsumerFunction.addToRolePolicy(
+    notificationConsumerFunction.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['ses:SendEmail'],
         resources: ['*'],
@@ -211,10 +248,29 @@ export class NotificationsStack extends cdk.Stack {
         }
       })
     )
-    eventBus.grantPutEventsTo(queueConsumerFunction)
-    return { queueConsumerFunction }
+    eventBus.grantPutEventsTo(notificationConsumerFunction)
+    return { notificationConsumerFunction }
   }
 
+  private setupProfiles(
+    props: NotificationsProps,
+    lambdaDefaults: cdk.aws_lambda_nodejs.NodejsFunctionProps
+  ) {
+    const eventBus = events.EventBus.fromEventBusName(this, 'ProfilesEventBus', props.eventBusName)
+
+    const profilesConsumerFunction = createQueueConsumer(this, {
+      lambdaDefaults,
+      entry: join(__dirname, 'profiles', 'consumer.ts'),
+      eventBus,
+      name: 'ProfilesConsumerFunction',
+      sources: {
+        'services.profiles': ['profile.updated']
+      }
+    })
+
+    eventBus.grantPutEventsTo(profilesConsumerFunction)
+    return { profilesConsumerFunction }
+  }
   private setupWebSocket(
     lambdaDefaults: cdk.aws_lambda_nodejs.NodejsFunctionProps,
     connectionsTable: cdk.aws_dynamodb.Table,

@@ -7,6 +7,12 @@ const dynamo = DynamoDBDocumentClient.from(client)
 
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb'
 
+import {
+  pascalToSnakeKeys,
+  getUpdateExpression,
+  getExpressionAttributeValues,
+  getExpressionAttributeNames
+} from '../../core/db'
 const tableName = process.env.PROMPT_TABLE
 
 export const getPrompts = async () => {
@@ -49,47 +55,4 @@ export const updatePrompt = async (contentType: string, prompt: any) => {
       ExpressionAttributeValues: expressionAttributeValues
     })
   )
-}
-
-const pascalToSnakeKeys = (obj: any) => {
-  const newObj: any = {}
-  for (const key in obj) {
-    const newKey = key
-      .split(/\.?(?=[A-Z])/)
-      .join('_')
-      .toLowerCase()
-    newObj[newKey] = obj[key]
-  }
-  return newObj
-}
-
-const getUpdateExpression = (record: any) => {
-  return Object.keys(record)
-    .filter((i) => !!record[i])
-    .map((i) => `#${i} = :value${i}`)
-    .join(', ')
-}
-
-const getExpressionAttributeValues = (record: any) => {
-  return Object.keys(record)
-    .filter((i) => !!record[i])
-    .reduce(
-      (acc, i) => ({
-        ...acc,
-        [`:value${i}`]: record[i]
-      }),
-      {}
-    )
-}
-
-const getExpressionAttributeNames = (record: any) => {
-  return Object.keys(record)
-    .filter((i) => !!record[i])
-    .reduce(
-      (acc, i) => ({
-        ...acc,
-        [`#${i}`]: i
-      }),
-      {}
-    )
 }

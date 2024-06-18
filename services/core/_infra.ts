@@ -212,16 +212,19 @@ export function createQueueConsumer(
     lambdaDefaults,
     entry,
     eventBus,
-    sources
+    sources,
+    name
   }: {
     lambdaDefaults: NodejsFunctionProps
     entry: string
     eventBus: events.IEventBus
     sources: { [key: string]: string[] }
+    name?: string
   }
 ) {
+  const functionName = name || 'QueueConsumerFunction'
   // Queue consumer
-  const queueConsumerFunction = new NodejsFunction(stack, 'QueueConsumerFunction', {
+  const queueConsumerFunction = new NodejsFunction(stack, functionName, {
     ...lambdaDefaults,
     entry,
     handler: 'handler'

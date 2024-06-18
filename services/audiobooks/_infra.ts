@@ -30,12 +30,14 @@ export class AudiobooksStack extends cdk.Stack {
     const audiobooksTable = new dynamodb.Table(this, 'AudiobooksTable', {
       partitionKey: { name: 'UserId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 
     const revisionsTable = new dynamodb.Table(this, 'RevisionsTable', {
       partitionKey: { name: 'AudiobookId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 
@@ -88,7 +90,7 @@ export class AudiobooksStack extends cdk.Stack {
       entry: join(__dirname, 'consumer.ts'),
       eventBus,
       sources: {
-        'services.audiobooks': ['audio.created', 'audio.deleted', 'revision.created']
+        'services.audiobooks': ['audio.deleted']
       }
     })
 

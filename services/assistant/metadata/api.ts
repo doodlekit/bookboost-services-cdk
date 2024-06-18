@@ -8,8 +8,9 @@ export const update = async (event: any) => {
   const metadata = JSON.parse(event.body)
   await updateMetadata(userId, metadata)
   const assistant = await getAssistantByUserId(userId)
+  const updatedMetadata = await getMetadata(userId)
   if (assistant) {
-    await updateAssistant(assistant.openai_assistant_id, metadata)
+    await updateAssistant(assistant.openai_assistant_id, updatedMetadata)
   }
   return {
     statusCode: 200,
