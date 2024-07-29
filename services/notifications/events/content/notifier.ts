@@ -1,5 +1,7 @@
+import { getProfile } from '../../profiles/db'
 import { createNotification } from '../db'
 import { sendNotification } from '../push'
+import { sendSlackNotification } from '../slack'
 import { sendContentGeneratedEmail } from './mailer'
 
 export default async function (source: string, eventType: string, body: any) {
@@ -10,8 +12,10 @@ export default async function (source: string, eventType: string, body: any) {
     await sendContentGeneratedEmail(body.content)
   }
 
+  const profile = await getProfile(userId)
+
   // Save the event to the database
-  const notification = await createNotification(userId, {
+  const notification = await createNotification(profile, {
     content: `New ${body.content.content_type} generated`,
     type: eventType,
     source: source

@@ -3,7 +3,7 @@ import audiobookTemplate from './templates/new-audiobook'
 import revisionRequestEmail from './templates/revision-request'
 import revisionResponseEmail from './templates/revision-response'
 
-export async function sendRevisionEmail(revision: any) {
+export async function sendRevisionEmail(profile: any, revision: any) {
   console.log('Sending email for revision:', revision)
   if (revision.type === 'REQUEST') {
     const toAddress = process.env.TO_EMAIL || ''
@@ -15,7 +15,7 @@ export async function sendRevisionEmail(revision: any) {
     )
   } else if (revision.type === 'RESPONSE') {
     await sendEmail(
-      revision.user_email,
+      profile.email,
       revisionResponseEmail.getSubject(revision),
       revisionResponseEmail.getTextBody(revision),
       revisionResponseEmail.getHtmlBody(revision)

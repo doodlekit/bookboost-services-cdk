@@ -86,7 +86,8 @@ export class NotificationsStack extends cdk.Stack {
         SOCKET_URL: `https://${props.socketDomainName}`,
         FROM_EMAIL: props.fromEmail,
         TO_EMAIL: props.toEmail,
-        BASE_DOMAIN: props.emailDomain
+        BASE_DOMAIN: props.emailDomain,
+        SEND_SLACK_NOTIFICATIONS: props.environment === 'prod' ? 'true' : 'false'
       }
     }
     // API Gateway

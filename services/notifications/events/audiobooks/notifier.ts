@@ -2,6 +2,7 @@ import { getProfile } from '../../profiles/db'
 import { sendMessage } from '../../sms'
 import { createNotification } from '../db'
 import { sendNotification } from '../push'
+import { sendSlackNotification } from '../slack'
 import { sendAudiobookEmail, sendRevisionEmail } from './mailer'
 import revesionTemplate from './templates/revision-response'
 
@@ -19,9 +20,9 @@ async function sendRevisionNotification(source: string, eventType: string, revis
   const userId = revision.user_id
   const profile = await getProfile(userId)
   // Save the event to the database
-  await sendRevisionEmail(revision)
+  await sendRevisionEmail(profile, revision)
   if (revision.type === 'RESPONSE') {
-    const notification = await createNotification(userId, {
+    const notification = await createNotification(profile, {
       content: 'New audibook revision',
       type: eventType,
       object_type: 'audiobook',
@@ -31,6 +32,19 @@ async function sendRevisionNotification(source: string, eventType: string, revis
     await sendNotification(notification)
     if (revision.send_sms && profile && profile.phone) {
       await sendMessage(profile.phone, revesionTemplate.getSmsBody(revision))
+    }
+  } else {
+    try {
+      // Send slack notification
+      await sendSlackNotification({
+        user_id: userId,
+        user_full_name: profile.full_name,
+        user_email: profile.email,
+        content: 'New audibook revision request\n\n' + revision.notes,
+        created_at: new Date().toISOString()
+      })
+    } catch (error) {
+      console.error('Error sending slack notification', error)
     }
   }
 }
@@ -45,5 +59,18 @@ async function sendAudiobookNotification(source: string, eventType: string, audi
   //   source: source
   // })
   await sendAudiobookEmail(audiobook)
-  // await sendNotification(notification)
+  try {
+    const userId = audiobook.user_id
+    const profile = await getProfile(userId)
+    // Send slack notification
+    await sendSlackNotification({
+      user_id: profile.user_id,
+      user_full_name: profile.full_name,
+      user_email: profile.email,
+      content: 'New audibook ready to be created',
+      created_at: new Date().toISOString()
+    })
+  } catch (error) {
+    console.error('Error sending slack notification', error)
+  }
 }

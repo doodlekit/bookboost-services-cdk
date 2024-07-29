@@ -39,6 +39,7 @@ export const createRevision = async (userId: string, audiobookId: string, revisi
     Notes: revision.notes,
     Sender: revision.sender,
     Type: revision.type,
+    Attachments: revision.attachments,
     State: 'CREATED',
     CreatedAt: new Date().toISOString(),
     UpdatedAt: new Date().toISOString()

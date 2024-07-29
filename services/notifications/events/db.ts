@@ -13,7 +13,7 @@ const dynamo = DynamoDBDocumentClient.from(client)
 const tableName = process.env.NOTIFICATIONS_TABLE
 const indexName = process.env.NOTIFICATIONS_INDEX
 
-export const createNotification = async (userId: string, notificaton: any) => {
+export const createNotification = async (profile: any, notificaton: any) => {
   const id = uuidv4()
 
   const createdAt = new Date().toISOString()
@@ -21,7 +21,9 @@ export const createNotification = async (userId: string, notificaton: any) => {
     new PutCommand({
       TableName: tableName,
       Item: {
-        UserId: userId,
+        UserId: profile.user_id,
+        UserEmail: profile.email,
+        UserFullName: profile.full_name,
         Id: id,
         Content: notificaton.content,
         Read: false,
@@ -36,7 +38,7 @@ export const createNotification = async (userId: string, notificaton: any) => {
   return {
     id,
     created_at: createdAt,
-    user_id: userId,
+    user_id: profile.user_id,
     ...notificaton
   }
 }

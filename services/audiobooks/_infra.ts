@@ -146,6 +146,15 @@ function setupAdminFunctions(
     handler: 'update',
     authorizationScopes: ['manage:users']
   })
+  const deleteAudiobookFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks/{audiobookId}',
+    method: httpapi.HttpMethod.DELETE,
+    entry: join(__dirname, 'audiobooks', 'admin.ts'),
+    handler: 'destroy',
+    authorizationScopes: ['manage:users']
+  })
   const getRevisionsFunction = addRoute(stack, api, {
     authorizer,
     lambdaDefaults,
@@ -168,6 +177,7 @@ function setupAdminFunctions(
   return [
     listAudiobooksFunction,
     updateAudiobookFunction,
+    deleteAudiobookFunction,
     getRevisionsFunction,
     createRevisionFunction
   ]

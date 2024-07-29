@@ -1,4 +1,4 @@
-import { getAudiobooks, updateAudiobook } from './db'
+import { getAudiobooks, updateAudiobook, deleteAudiobook } from './db'
 
 export async function list(event: any) {
   const userId = atob(event.pathParameters.userId)
@@ -24,5 +24,17 @@ export async function update(event: any) {
   return {
     statusCode: 200,
     body: JSON.stringify({ message: 'Audiobook updated' })
+  }
+}
+
+export async function destroy(event: any) {
+  const userId = atob(event.pathParameters.userId)
+  const bookId = event.pathParameters.audiobookId
+
+  await deleteAudiobook(userId, bookId)
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ message: 'Audiobook deleted' })
   }
 }
