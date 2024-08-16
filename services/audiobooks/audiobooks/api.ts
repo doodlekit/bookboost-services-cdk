@@ -6,6 +6,8 @@ import {
   deleteAudiobook
 } from './db'
 
+import { getChapters } from '../chapters/db'
+
 import { publish } from '../../core/messages'
 import { getUserId } from '../../core/auth'
 
@@ -25,6 +27,8 @@ export async function get(event: any) {
   const userId = getUserId(event)
 
   const book = await getAudiobook(userId, id)
+  const chapters = await getChapters(id)
+  book.chapters = chapters
 
   return {
     statusCode: 200,

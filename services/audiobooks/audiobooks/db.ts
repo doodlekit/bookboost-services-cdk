@@ -13,15 +13,8 @@ import {
   getExpressionAttributeNames
 } from '../../core/db'
 
-import {
-  DeleteCommand,
-  GetCommand,
-  PutCommand,
-  ScanCommand,
-  UpdateCommand
-} from '@aws-sdk/lib-dynamodb'
+import { DeleteCommand, GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb'
 import { v4 as uuidv4 } from 'uuid'
-import { State } from 'aws-cdk-lib/aws-stepfunctions'
 
 const tableName = process.env.AUDIOBOOKS_TABLE
 
@@ -83,7 +76,8 @@ export const updateAudiobook = async (userId: string, id: string, audiobook: any
     UpdatedAt: new Date().toISOString(),
     State: audiobook.state,
     SampleUrl: audiobook.sample_url,
-    FinalUrl: audiobook.final_url
+    FinalUrl: audiobook.final_url,
+    FinalNotes: audiobook.final_notes
   }
 
   const updateExpression = getUpdateExpression(record)

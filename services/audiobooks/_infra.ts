@@ -41,6 +41,13 @@ export class AudiobooksStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN
     })
 
+    const chaptersTable = new dynamodb.Table(this, 'ChaptersTable', {
+      partitionKey: { name: 'AudiobookId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'Id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN
+    })
+
     // Files API Gateway
     const { api, authorizer } = createApi(this, {
       zoneName: props.zoneName,
@@ -58,6 +65,7 @@ export class AudiobooksStack extends cdk.Stack {
         EVENT_BUS: props.eventBusName,
         AUDIOBOOKS_TABLE: audiobooksTable.tableName,
         REVISIONS_TABLE: revisionsTable.tableName,
+        CHAPTERS_TABLE: chaptersTable.tableName,
         FROM_EMAIL: props.fromEmail,
         TO_EMAIL: props.toEmail,
         BASE_DOMAIN: props.emailDomain
@@ -110,12 +118,14 @@ export class AudiobooksStack extends cdk.Stack {
 
     functions.map((fn) => eventBus.grantPutEventsTo(fn))
     functions.map((fn) => audiobooksTable.grantReadWriteData(fn))
+    functions.map((fn) => chaptersTable.grantReadWriteData(fn))
 
     revisionsFunctions.map((fn) => revisionsTable.grantReadWriteData(fn))
     revisionsFunctions.map((fn) => eventBus.grantPutEventsTo(fn))
 
     adminFunctions.map((fn) => revisionsTable.grantReadWriteData(fn))
     adminFunctions.map((fn) => audiobooksTable.grantReadWriteData(fn))
+    adminFunctions.map((fn) => chaptersTable.grantReadWriteData(fn))
     adminFunctions.map((fn) => eventBus.grantPutEventsTo(fn))
 
     revisionsTable.grantReadWriteData(queueConsumerFunction)
@@ -135,6 +145,15 @@ function setupAdminFunctions(
     method: httpapi.HttpMethod.GET,
     entry: join(__dirname, 'audiobooks', 'admin.ts'),
     handler: 'list',
+    authorizationScopes: ['manage:users']
+  })
+  const getAudiobookFunction = addRoute(stack, api, {
+    authorizer,
+    lambdaDefaults,
+    path: '/admin/{userId}/audiobooks/{audiobookId}',
+    method: httpapi.HttpMethod.GET,
+    entry: join(__dirname, 'audiobooks', 'admin.ts'),
+    handler: 'get',
     authorizationScopes: ['manage:users']
   })
   const updateAudiobookFunction = addRoute(stack, api, {
@@ -175,6 +194,7 @@ function setupAdminFunctions(
   })
 
   return [
+    getAudiobookFunction,
     listAudiobooksFunction,
     updateAudiobookFunction,
     deleteAudiobookFunction,
