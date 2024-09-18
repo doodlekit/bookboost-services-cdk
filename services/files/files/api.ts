@@ -1,8 +1,8 @@
-import { getUserId } from '../core/auth'
+import { getUserId } from '../../core/auth'
 
 import { getFile, getFiles, createFile, updateFile, deleteFile } from './db'
 
-import { publish } from '../core/messages'
+import { publish } from '../../core/messages'
 
 export async function list(event: any) {
   console.log('event: ', event)

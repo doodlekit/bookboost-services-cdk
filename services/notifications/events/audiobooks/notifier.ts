@@ -3,8 +3,9 @@ import { sendMessage } from '../../sms'
 import { createNotification } from '../db'
 import { sendNotification } from '../push'
 import { sendSlackNotification } from '../slack'
-import { sendAudiobookEmail, sendRevisionEmail } from './mailer'
-import revesionTemplate from './templates/revision-response'
+import { sendAudiobookEmail, sendAudiobookFinalizedEmail, sendRevisionEmail } from './mailer'
+import revisionTemplate from './templates/revision-response'
+import audiobookFinalizedTemplate from './templates/final-audiobook'
 
 export default async function (source: string, eventType: string, body: any) {
   console.log('Event received:', source, eventType, body)
@@ -12,6 +13,8 @@ export default async function (source: string, eventType: string, body: any) {
     await sendRevisionNotification(source, eventType, body.revision)
   } else if (source === 'services.audiobooks' && eventType === 'audiobook.created') {
     await sendAudiobookNotification(source, eventType, body.audiobook)
+  } else if (source === 'services.audiobooks' && eventType === 'audiobook.finalized') {
+    await sendAudiobookFinalizedNotification(source, eventType, body.audiobook)
   }
 }
 
@@ -31,7 +34,7 @@ async function sendRevisionNotification(source: string, eventType: string, revis
     })
     await sendNotification(notification)
     if (revision.send_sms && profile && profile.phone) {
-      await sendMessage(profile.phone, revesionTemplate.getSmsBody(revision))
+      await sendMessage(profile.phone, revisionTemplate.getSmsBody(revision))
     }
   } else {
     try {
@@ -73,4 +76,25 @@ async function sendAudiobookNotification(source: string, eventType: string, audi
   } catch (error) {
     console.error('Error sending slack notification', error)
   }
+}
+
+async function sendAudiobookFinalizedNotification(
+  source: string,
+  eventType: string,
+  audiobook: any
+) {
+  const userId = audiobook.user_id
+  const profile = await getProfile(userId)
+  const notification = await createNotification(profile, {
+    content: 'Audiobook Finalized',
+    type: eventType,
+    object_type: 'audiobook',
+    object_id: audiobook.id,
+    source: source
+  })
+  await sendNotification(notification)
+  if (profile.phone) {
+    await sendMessage(profile.phone, audiobookFinalizedTemplate.getSmsBody(audiobook))
+  }
+  await sendAudiobookFinalizedEmail(audiobook)
 }

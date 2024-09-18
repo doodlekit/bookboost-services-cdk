@@ -1,5 +1,6 @@
 import { sendEmail } from '../../mailer'
 import audiobookTemplate from './templates/new-audiobook'
+import audiobookFinalizedTemplate from './templates/final-audiobook'
 import revisionRequestEmail from './templates/revision-request'
 import revisionResponseEmail from './templates/revision-response'
 
@@ -29,5 +30,15 @@ export async function sendAudiobookEmail(audiobook: any) {
     audiobookTemplate.getSubject(audiobook),
     audiobookTemplate.getTextBody(audiobook),
     audiobookTemplate.getHtmlBody(audiobook)
+  )
+}
+
+export async function sendAudiobookFinalizedEmail(audiobook: any) {
+  const toAddress = process.env.TO_EMAIL || ''
+  await sendEmail(
+    toAddress,
+    audiobookFinalizedTemplate.getSubject(audiobook),
+    audiobookFinalizedTemplate.getTextBody(audiobook),
+    audiobookFinalizedTemplate.getHtmlBody(audiobook)
   )
 }

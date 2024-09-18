@@ -7,3 +7,6 @@ aws ssm put-parameter --name "dev.STRIPE_SECRET_KEY" --value "" --type String --
 aws ssm put-parameter --name "dev.TWILIO_SID" --value "" --type String --profile group49
 aws ssm put-parameter --name "dev.TWILIO_TOKEN" --value "" --type String --profile group49
 aws ssm put-parameter --name "dev.TWILIO_NUMBER" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.CONVERT_API_KEY" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.ANTHROPIC_API_KEY" --value "" --type String --profile group49
+aws ssm put-parameter --name "dev.GOOGLE_API_KEY" --value "" --type String --profile group49

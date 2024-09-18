@@ -265,7 +265,8 @@ export class NotificationsStack extends cdk.Stack {
       eventBus,
       name: 'ProfilesConsumerFunction',
       sources: {
-        'services.profiles': ['profile.updated']
+        'services.profiles': ['profile.updated'],
+        'services.auth': ['user.created']
       }
     })
 

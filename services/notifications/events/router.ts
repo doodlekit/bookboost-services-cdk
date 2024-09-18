@@ -3,7 +3,7 @@ import ContentNotifier from './content/notifier'
 
 const events: any = {
   'services.audiobooks': {
-    types: ['audiobook.created', 'revision.created'],
+    types: ['audiobook.created', 'audiobook.finalized', 'revision.created'],
     notifier: AudiobookNotifier
   },
   'services.assistant': {

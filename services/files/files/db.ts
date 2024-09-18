@@ -6,6 +6,11 @@ import * as AWSXray from 'aws-xray-sdk'
 const client = AWSXray.captureAWSv3Client(new DynamoDBClient())
 const dynamo = DynamoDBDocumentClient.from(client)
 const tableName = process.env.FILES_TABLE
+import {
+  getUpdateExpression,
+  getExpressionAttributeValues,
+  getExpressionAttributeNames
+} from '../../core/db'
 
 export const updateAssistant = async (
   userId: string,
@@ -84,10 +89,14 @@ export const createFile = async (userId: string, file: any) => {
 
 export const updateFile = async (userId: string, id: string, file: any) => {
   const record: any = {
-    Id: id,
     UpdatedAt: new Date().toISOString(),
-    FileName: file.file_name
+    FileName: file.file_name,
+    ContentsObject: file.contents_object,
+    ContentsExtractionEvaluation: file.contents_extraction_evaluation
   }
+  const updateExpression = getUpdateExpression(record)
+  const expressionAttributeValues = getExpressionAttributeValues(record)
+  const expressionAttributeNames = getExpressionAttributeNames(record)
   await dynamo.send(
     new UpdateCommand({
       TableName: tableName,
@@ -95,10 +104,10 @@ export const updateFile = async (userId: string, id: string, file: any) => {
         UserId: userId,
         Id: id
       },
-      UpdateExpression: `SET UpdatedAt = :updatedAt, FileName = :fileName`,
+      UpdateExpression: 'SET ' + updateExpression,
+      ExpressionAttributeNames: expressionAttributeNames,
       ExpressionAttributeValues: {
-        ':updatedAt': record.UpdatedAt,
-        ':fileName': record.FileName
+        ...expressionAttributeValues
       }
     })
   )
@@ -152,6 +161,8 @@ function transformFromDb(file: any) {
     storage_file_id: file.StorageFileId || '',
     url: `https://${process.env.ASSETS_DOMAIN}/${file.Key}`,
     is_ready: file.VectorStoreId ? true : false,
-    error: file.Error || ''
+    error: file.Error || '',
+    contents_object: file.ContentsObject || {},
+    contents_extraction_evaluation: file.ContentsExtractionEvaluation || {}
   }
 }

@@ -1,5 +1,6 @@
 import { getAudiobook, getAudiobooks, updateAudiobook, deleteAudiobook } from './db'
 import { createChapter, deleteChapters, getChapters } from '../chapters/db'
+import { publish } from '../../core/messages'
 
 export async function list(event: any) {
   const userId = atob(event.pathParameters.userId)
@@ -34,6 +35,13 @@ export async function update(event: any) {
 
   await updateAudiobook(userId, bookId, body)
   await updateChapters(userId, body)
+
+  if (body.state === 'FINALIZED') {
+    const audiobook = await getAudiobook(userId, bookId)
+    await publish('services.audiobooks', 'audiobook.finalized', {
+      audiobook
+    })
+  }
 
   return {
     statusCode: 200,

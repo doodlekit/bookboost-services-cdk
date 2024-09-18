@@ -15,7 +15,7 @@ export async function sendEmail(
   console.log('To:', toAddress)
   console.log('From:', fromAddress)
   const input: SendEmailCommandInput = {
-    Source: fromAddress,
+    Source: 'Bookboost <' + fromAddress + '>',
     Destination: {
       ToAddresses: [toAddress]
     },

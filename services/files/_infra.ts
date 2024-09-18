@@ -9,8 +9,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront'
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins'
 import * as events from 'aws-cdk-lib/aws-events'
-import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations'
-import { NodejsFunction, NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
+import { NodejsFunctionProps } from 'aws-cdk-lib/aws-lambda-nodejs'
 import { join } from 'path'
 import { createApi, addResourcefulRoutes, createQueueConsumer, addRoute } from '../core/_infra'
 
@@ -22,6 +21,7 @@ interface FilesProps extends cdk.StackProps {
   jwtIssuer: string
   jwtAudience: string
   filesBucketName: string
+  jobsBucket: s3.IBucket
 }
 
 export class FilesStack extends cdk.Stack {
@@ -64,7 +64,36 @@ export class FilesStack extends cdk.Stack {
       authorizer,
       lambdaDefaults,
       root: 'files',
-      entry: join(__dirname, 'api.ts')
+      entry: join(__dirname, 'files/api.ts')
+    })
+
+    const adminListFilesFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      authorizationScopes: ['manage:users'],
+      path: '/admin/{userId}/files',
+      method: httpapi.HttpMethod.GET,
+      entry: join(__dirname, 'files/api.ts'),
+      handler: 'list'
+    })
+
+    const adminGetContentsFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      authorizationScopes: ['manage:users'],
+      path: '/admin/{userId}/files/{fileId}/chapters',
+      method: httpapi.HttpMethod.GET,
+      entry: join(__dirname, 'files/admin.ts'),
+      handler: 'getContents'
+    })
+    const updateAdminFileChaptersFunction = addRoute(this, api, {
+      authorizer,
+      lambdaDefaults,
+      path: '/admin/{userId}/files/{fileId}/chapters',
+      method: httpapi.HttpMethod.PUT,
+      entry: join(__dirname, 'files/admin.ts'),
+      handler: 'updateContents',
+      authorizationScopes: ['manage:users']
     })
 
     // Give the CRUD functions access to the bucket and table
@@ -72,6 +101,14 @@ export class FilesStack extends cdk.Stack {
       filesBucket.grantReadWrite(fn)
       filesTable.grantReadWriteData(fn)
     })
+
+    // Grant read access to jobsBucket for getAdminFileContent function
+    props.jobsBucket.grantRead(adminGetContentsFunction)
+    props.jobsBucket.grantReadWrite(updateAdminFileChaptersFunction)
+    filesBucket.grantReadWrite(adminListFilesFunction)
+    filesTable.grantReadWriteData(adminGetContentsFunction)
+    filesTable.grantReadWriteData(updateAdminFileChaptersFunction)
+    filesTable.grantReadWriteData(adminListFilesFunction)
 
     const uploadRequestFunction = addRoute(this, api, {
       authorizer,
@@ -99,7 +136,8 @@ export class FilesStack extends cdk.Stack {
       entry: join(__dirname, 'consumer.ts'),
       eventBus,
       sources: {
-        'services.assistant': ['assistant.file.created', 'assistant.file.error']
+        'services.assistant': ['assistant.file.created', 'assistant.file.error'],
+        'services.processor': ['job.completed', 'job.extracted']
       }
     })
     filesTable.grantReadWriteData(queueConsumerFunction)

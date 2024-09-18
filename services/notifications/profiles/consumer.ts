@@ -8,6 +8,7 @@ export const handler = async (event: EventBridgeEvent<any, any>) => {
   const type = event['detail-type']
   switch (type) {
     case 'profile.updated':
+    case 'user.created':
       await onProfileUpdated(message.user)
       break
   }

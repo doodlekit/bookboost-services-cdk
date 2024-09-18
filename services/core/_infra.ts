@@ -163,7 +163,7 @@ export function addRoute(
     handler,
     authorizationScopes
   }: {
-    authorizer: HttpJwtAuthorizer
+    authorizer?: HttpJwtAuthorizer
     lambdaDefaults: NodejsFunctionProps
     path: string
     method: httpapi.HttpMethod

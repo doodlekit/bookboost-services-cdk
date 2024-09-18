@@ -89,6 +89,19 @@ const pascalToSnakeKeys = (obj: any) => {
       .join('_')
       .toLowerCase()
     newObj[newKey] = obj[key]
+    if (
+      key === 'Attachments' &&
+      Array.isArray(obj[key]) &&
+      obj[key].length > 0 &&
+      typeof obj[key][0] === 'string'
+    ) {
+      newObj[newKey] = obj[key].map((attachment: string) => ({
+        url: attachment,
+        name: attachment.split('/').pop() || attachment,
+        size: 0,
+        type: 'audio/mpeg'
+      }))
+    }
   }
   return newObj
 }
