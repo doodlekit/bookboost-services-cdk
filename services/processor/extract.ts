@@ -64,6 +64,7 @@ function removeStars(title: string): string {
 }
 
 function compareTitles(title1: string, title2: string, weakMatch: boolean = true) {
+  // Remove asterisks as they are wildcards in the fuzzy matching
   const title1NoStars = removeStars(title1).trim()
   const title2NoStars = removeStars(title2).trim()
   if (!title1NoStars || !title2NoStars) {
@@ -71,25 +72,33 @@ function compareTitles(title1: string, title2: string, weakMatch: boolean = true
   }
   const format1 = formatTitle(title1NoStars)
   const format2 = formatTitle(title2NoStars)
+  // If the titles are too short, they are probably not chapter titles
   if (format1.length < 5 || format2.length < 5) {
     return false
   }
+  // Try a direct match first
   if (format1.startsWith(format2) || format2.startsWith(format1)) {
     return true
   }
   if (!weakMatch) {
     return false
   }
+  // If there was no direct match, try a fuzzy match
   const similarity = fuzzy(title1NoStars, title2NoStars, {
     ignoreCase: true,
     ignoreWhitespace: true,
     returnMatchData: true
   })
   let match = false
+
+  // We're using a combination of index and length to determine if the match is strong
+  // This helps avoid false positives like "Chapter" matching "Chapter 1: The First Chapter"
+  // If the match is at the start of the title and is at least 75% of the title, it's a match
   const indexZeroMatch =
     similarity.score > 0.7 &&
     similarity.match.index === 0 &&
     similarity.match.length > title2NoStars.length * 0.75
+  // If the score is stronger, we can be more relaxed about the index and length
   const offsetMatch =
     similarity.score > 0.8 &&
     similarity.match.index < 4 &&
@@ -104,10 +113,12 @@ function analyzeChapterTitles(manuscript: string, chapterTitles: string[]) {
   const tocLine = lines.find((line) => tocPattern.test(line))
   const tocLineIndex = tocLine ? lines.indexOf(tocLine) : 0
 
+  // Does the first chapter title appear in the lines after the TOC?
   let firstChapterInText = false
   const firstChapter = chapterTitles[0]
   if (tocLine) {
-    const linesInTox = lines.slice(tocLineIndex, tocLineIndex + chapterTitles.length)
+    // We pad this back 5 lines to account for differnces in the extracted titles and the actual TOC
+    const linesInTox = lines.slice(tocLineIndex + chapterTitles.length - 5)
     for (const line of linesInTox) {
       if (compareTitles(line, firstChapter)) {
         firstChapterInText = true
@@ -116,6 +127,7 @@ function analyzeChapterTitles(manuscript: string, chapterTitles: string[]) {
     }
   }
 
+  // Does the last chapter title appear in the TOC?
   let lastChapterInToc = false
   const lastChapter = chapterTitles[chapterTitles.length - 1]
   if (tocLine) {
@@ -128,6 +140,8 @@ function analyzeChapterTitles(manuscript: string, chapterTitles: string[]) {
     }
   }
 
+  // Do at least 80% of the chapter titles appear in the content?
+  // This will be used later to determine if fuzzy matching is needed
   let strongTitleMatch = 0
   const strongTitleMatchLimit = chapterTitles.length * 0.8
   const contentLines = lines.slice(tocLineIndex + chapterTitles.length)
@@ -181,6 +195,7 @@ async function removeToc(manuscript: string, chapterTitles: string[], stats: any
       if (tocCheck.result) {
         pastToc = true
         inToc = 0
+        // If this is the last line of the TOC, skip it
         if (tocCheck.skipLine) {
           continue
         }
