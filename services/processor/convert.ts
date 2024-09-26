@@ -7,7 +7,7 @@ async function docToText(userId: string, jobId: string, doc: any): Promise<any> 
   const fileExtension = doc.file_name.split('.').pop().toLowerCase()
 
   const response = await axios.post(
-    `${convertApiUrl}/async/convert/${fileExtension}/to/txt?Secret=${convertApiKey}&StoreFile=true&RemoveHeadersFooters=true&File=${doc.url}&WebHook=${baseUrl}/convert/callback/${userId}/${jobId}`
+    `${convertApiUrl}/async/convert/${fileExtension}/to/txt?Secret=${convertApiKey}&StoreFile=true&RemoveHeadersFooters=true&File=${doc.url}&WebHook=${baseUrl}&Timeout=1200/convert/callback/${userId}/${jobId}`
   )
   console.log('response', response)
   if (response.status !== 200) {

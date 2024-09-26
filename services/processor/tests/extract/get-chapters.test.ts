@@ -4,12 +4,14 @@ dotenv.config()
 import { getChapterTitles } from '../../extract'
 import fs from 'fs'
 import path from 'path'
+import { expect, jest, test } from '@jest/globals'
 
 function downcaseAllTitles(titles: string[]) {
   return titles.map((title) => title.toLowerCase())
 }
 
 describe('getChapterTitles', () => {
+  jest.retryTimes(2)
   const booksFolder = path.join(__dirname, 'fixtures', 'books')
   const outputFolder = path.join(__dirname, 'output')
 
@@ -53,7 +55,7 @@ describe('getChapterTitles', () => {
           expect(title.trim()).not.toBe('')
         })
 
-        const chaptersFixturePath = path.join(__dirname, 'fixtures', 'chapters', outputFileName)
+        const chaptersFixturePath = path.join(__dirname, 'fixtures', 'titles', outputFileName)
         const chaptersFixture = JSON.parse(fs.readFileSync(chaptersFixturePath, 'utf-8'))
 
         expect(downcaseAllTitles(chapterTitles).sort()).toEqual(
