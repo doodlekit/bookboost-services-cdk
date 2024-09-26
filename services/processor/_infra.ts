@@ -70,6 +70,10 @@ export class ProcessorStack extends cdk.Stack {
           this,
           props.environment + '.ANTHROPIC_API_KEY'
         ),
+        OPENAI_API_KEY: ssm.StringParameter.valueForStringParameter(
+          this,
+          props.environment + '.OPENAI_API_KEY'
+        ),
         JOBS_BUCKET: this.jobsBucket.bucketName,
         BUCKET_REGION: this.region,
         BASE_URL: `https://${props.domainName}`

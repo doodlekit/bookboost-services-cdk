@@ -84,4 +84,20 @@ async function getS3Content(key: string) {
   return text
 }
 
-export { streamUrlToS3, writeJsonToS3, getS3Content }
+async function downloadFileFromUrl(url: string) {
+  // Write to /tmp file
+  const tmpFilePath = path.join('/tmp', path.basename(url))
+  const fileStream = fs.createWriteStream(tmpFilePath)
+
+  // Download the file from the URL
+  const response = await axios({
+    method: 'get',
+    url: url,
+    responseType: 'arraybuffer'
+  })
+  await fs.promises.writeFile(tmpFilePath, response.data)
+
+  return tmpFilePath
+}
+
+export { streamUrlToS3, writeJsonToS3, getS3Content, downloadFileFromUrl }

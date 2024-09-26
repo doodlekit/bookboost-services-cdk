@@ -3,7 +3,7 @@ import { EventBridgeEvent } from 'aws-lambda/trigger/eventbridge'
 import { docToText } from './convert'
 import { getJob, updateJob } from './jobs/db'
 import { publish } from '../core/messages'
-import { evaluateExtraction, postProcessChapter, processManuscriptFromS3 } from './extract'
+import { evaluateExtraction, processManuscriptFromS3, postProcessChapter } from './extract'
 import { getS3Content, writeJsonToS3 } from './s3'
 import { createPart, getPart, getParts, updatePart } from './parts/db'
 
@@ -35,11 +35,22 @@ async function onJobCreated(job: any) {
   console.log('Job created:', job)
 
   try {
-    const conversionJobId = await docToText(job.user_id, job.id, job.file)
-    await updateJob(job.user_id, job.id, {
-      status: 'CONVERTING',
-      conversion_job_id: conversionJobId
-    })
+    if (job.converted_file?.key) {
+      await updateJob(job.user_id, job.id, {
+        status: 'CONVERTED',
+        converted_file: job.converted_file
+      })
+      const updatedJob = await getJob(job.user_id, job.id)
+      await publish('services.processor', 'job.converted', {
+        job: updatedJob
+      })
+    } else {
+      const conversionJobId = await docToText(job.user_id, job.id, job.file)
+      await updateJob(job.user_id, job.id, {
+        status: 'CONVERTING',
+        conversion_job_id: conversionJobId
+      })
+    }
   } catch (error: any) {
     console.error('Error updating job:', error)
     await updateJob(job.user_id, job.id, {
@@ -109,7 +120,11 @@ async function onJobExtracted(job: any) {
       await publish('services.processor', 'part.created', {
         user_id: job.user_id,
         job_id: job.id,
-        part: newPart
+        part: {
+          id: newPart.id,
+          processed: newPart.processed,
+          order: newPart.order
+        }
       })
     }
 

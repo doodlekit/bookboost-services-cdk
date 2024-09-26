@@ -80,7 +80,10 @@ export const updateAudiobook = async (userId: string, id: string, audiobook: any
     FinalUrl: audiobook.final_url,
     FinalNotes: audiobook.final_notes,
     Cover: audiobook.cover,
-    LatestJobId: audiobook.latest_job_id
+    LatestJobId: audiobook.latest_job_id,
+    Title: audiobook.title,
+    Subtitle: audiobook.subtitle,
+    Genre: audiobook.genre
   }
 
   const updateExpression = getUpdateExpression(record)

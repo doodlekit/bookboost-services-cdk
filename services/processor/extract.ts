@@ -1,15 +1,26 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai'
-import { getS3Content } from './s3'
+import {
+  GoogleGenerativeAI,
+  SchemaType,
+  ModelParams,
+  HarmBlockThreshold,
+  HarmCategory
+} from '@google/generative-ai'
+import OpenAI from 'openai'
+import { GoogleAIFileManager, Part, UploadFileResponse } from '@google/generative-ai/server'
+import { getS3Content, downloadFileFromUrl } from './s3'
+import { fuzzy } from 'fast-fuzzy'
 
 // Constants
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || ''
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || ''
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ''
 const SYSTEM_PROMPT = `You are a JavaScript programmer tasked with creating a function to extract chapters from a book manuscript.`
 
 // Initialize clients
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 const genAI = new GoogleGenerativeAI(GOOGLE_API_KEY)
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY })
 
 // Utility functions
 function convertToAscii(text: string): string {
@@ -27,8 +38,163 @@ function convertToAscii(text: string): string {
     })
 }
 
+function stripNonAscii(text: string): string {
+  return text.replace(/[^\w\s]/g, '')
+}
+
+function formatTitle(title: string): string {
+  return stripNonAscii(
+    title
+      .toLowerCase()
+      .replace(/[\n\r\s]*/g, '')
+      .replace(/<[^>]*>?/g, '')
+      .trim()
+  )
+}
+
+function titleInLine(line: string, title: string): boolean {
+  if (formatTitle(line).startsWith(formatTitle(title))) {
+    return true
+  }
+  return false
+}
+
+function removeStars(title: string): string {
+  return title.replace(/\*/g, '')
+}
+
+function compareTitles(title1: string, title2: string, weakMatch: boolean = true) {
+  const title1NoStars = removeStars(title1).trim()
+  const title2NoStars = removeStars(title2).trim()
+  if (!title1NoStars || !title2NoStars) {
+    return false
+  }
+  const format1 = formatTitle(title1NoStars)
+  const format2 = formatTitle(title2NoStars)
+  if (format1.length < 5 || format2.length < 5) {
+    return false
+  }
+  if (format1.startsWith(format2) || format2.startsWith(format1)) {
+    return true
+  }
+  if (!weakMatch) {
+    return false
+  }
+  const similarity = fuzzy(title1NoStars, title2NoStars, {
+    ignoreCase: true,
+    ignoreWhitespace: true,
+    returnMatchData: true
+  })
+  let match = false
+  const indexZeroMatch =
+    similarity.score > 0.7 &&
+    similarity.match.index === 0 &&
+    similarity.match.length > title2NoStars.length * 0.75
+  const offsetMatch =
+    similarity.score > 0.8 &&
+    similarity.match.index < 4 &&
+    similarity.match.length > title2NoStars.length * 0.5
+  match = indexZeroMatch || offsetMatch
+  return match
+}
+
+function analyzeChapterTitles(manuscript: string, chapterTitles: string[]) {
+  const lines = manuscript.split('\n')
+  const tocPattern = /^\s*(Table of Contents|Contents|Chapters)\s*$/i
+  const tocLine = lines.find((line) => tocPattern.test(line))
+  const tocLineIndex = tocLine ? lines.indexOf(tocLine) : 0
+
+  let firstChapterInText = false
+  const firstChapter = chapterTitles[0]
+  if (tocLine) {
+    const linesInTox = lines.slice(tocLineIndex, tocLineIndex + chapterTitles.length)
+    for (const line of linesInTox) {
+      if (compareTitles(line, firstChapter)) {
+        firstChapterInText = true
+        break
+      }
+    }
+  }
+
+  let lastChapterInToc = false
+  const lastChapter = chapterTitles[chapterTitles.length - 1]
+  if (tocLine) {
+    const linesInTox = lines.slice(tocLineIndex, tocLineIndex + chapterTitles.length + 5)
+    for (const line of linesInTox) {
+      if (compareTitles(line, lastChapter)) {
+        lastChapterInToc = true
+        break
+      }
+    }
+  }
+
+  let strongTitleMatch = 0
+  const strongTitleMatchLimit = chapterTitles.length * 0.8
+  const contentLines = lines.slice(tocLineIndex + chapterTitles.length)
+  for (const line of contentLines) {
+    if (chapterTitles.find((title) => compareTitles(line, title, false))) {
+      strongTitleMatch++
+      if (strongTitleMatch > strongTitleMatchLimit) {
+        break
+      }
+    }
+  }
+
+  return {
+    tocLine,
+    firstChapterInText,
+    lastChapterInToc,
+    strongTitleMatch: strongTitleMatch > strongTitleMatchLimit
+  }
+}
+
+function endOfToc(line: string, chapterTitles: string[], stats: any, tocCount: number) {
+  if (stats.lastChapterInToc) {
+    const lastChapterTitle = chapterTitles[chapterTitles.length - 1]
+    return { result: compareTitles(line, lastChapterTitle), skipLine: true }
+  }
+  if (stats.firstChapterInText && tocCount > chapterTitles.length / 2) {
+    const firstChapterTitle = chapterTitles[0]
+    return { result: compareTitles(line, firstChapterTitle), skipLine: false }
+  }
+  return { result: false, skipLine: false }
+}
+
+async function removeToc(manuscript: string, chapterTitles: string[], stats: any) {
+  const tocPattern = /^\s*(Table of Contents|Contents|Chapters)\s*$/i
+  const lines = manuscript.split('\n')
+  const tocLine = lines.find((line) => tocPattern.test(line))
+  if (!tocLine) {
+    return manuscript
+  }
+
+  let truncatedManuscript = ''
+  let pastToc = false
+  let inToc = 0
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (tocPattern.test(line) || inToc) {
+      inToc++
+    }
+    if (!pastToc) {
+      const tocCheck = endOfToc(line, chapterTitles, stats, inToc)
+      if (tocCheck.result) {
+        pastToc = true
+        inToc = 0
+        if (tocCheck.skipLine) {
+          continue
+        }
+      }
+    }
+    if (pastToc) {
+      truncatedManuscript += lines[i] + '\n'
+    }
+  }
+  return truncatedManuscript
+}
+
 // New functions for Anthropic and Gemini API calls
-async function callAnthropic(prompt: string, maxTokens: number = 2000, temperature: number = 1) {
+async function callAnthropic(prompt: string, maxTokens: number = 4000, temperature: number = 1) {
   const response = await anthropic.messages.create({
     model: 'claude-3-5-sonnet-20240620',
     max_tokens: maxTokens,
@@ -43,157 +209,195 @@ async function callGemini(
   prompt: string,
   temperature: number = 0.5,
   schema?: any,
-  geminiModel: string = 'gemini-1.5-pro'
+  file?: UploadFileResponse
 ) {
-  const modelConfig: any = {
-    model: geminiModel,
+  const modelConfig: ModelParams = {
+    model: 'gemini-1.5-pro',
     generationConfig: {
       temperature: temperature
-    }
+    },
+    safetySettings: [
+      {
+        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        threshold: HarmBlockThreshold.BLOCK_NONE
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+        threshold: HarmBlockThreshold.BLOCK_NONE
+      },
+      {
+        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        threshold: HarmBlockThreshold.BLOCK_NONE
+      }
+    ]
   }
 
-  if (schema) {
+  if (schema && modelConfig.generationConfig) {
     modelConfig.generationConfig.responseMimeType = 'application/json'
     modelConfig.generationConfig.responseSchema = schema
   }
 
   const model = genAI.getGenerativeModel(modelConfig)
-  const result = await model.generateContent(prompt)
+
+  let promptParams: Array<Part> = [
+    {
+      text: prompt
+    }
+  ]
+  if (file) {
+    promptParams.push({
+      fileData: {
+        mimeType: file.file.mimeType,
+        fileUri: file.file.uri
+      }
+    })
+  }
+  const result = await model.generateContent(promptParams)
+
   return schema ? JSON.parse(result.response.text()) : result.response.text()
 }
 
-// Core processing functions
-async function preprocessManuscript(fileContent: string) {
-  // Check if the preprocessed file already exists
-  // const outputPath = 'preprocessed_structure.txt'
-  // try {
-  //   const existingContent = await fs.readFile(outputPath, 'utf-8')
-  //   console.log(`Preprocessed structure already exists. Loading from ${outputPath}`)
-  //   return existingContent
-  // } catch (error) {
-  //   // File doesn't exist, continue with preprocessing
-  //   console.log(`Preprocessed structure not found. Generating new structure.`)
-  // }
-  const preprocessPrompt = `
-<document>
-${fileContent}
-</document>
-
-Analyze the attached manuscript content and provide a summary of its structure.
-This summary will be used to create a Javascript function that extracts chapters from the manuscript.
-
-Include the following:
-- FULL list of chapter titles, sections, and any other relevant structural elements.
-- Use the full chapter titles, do not truncate them or remove the chapter numbers.
-- Whether there are any chapter titles that could easily be found in the contents of a chapter.
-- Whether there are chapter titles in the body that have leading spaces.
-
-Other considerations:
-- Do not add numbers at the beginning of the chapter titles.
-- Do not alter the chapter titles in any way.
-`
-
-  // console.log('----------------------------------------')
-  // console.log(preprocessPrompt)
-  // console.log('----------------------------------------')
-  const text = await callGemini(preprocessPrompt, 0.3)
-  console.log('----------------------------------------')
-  console.log(text)
-  console.log('----------------------------------------')
-  // Write the preprocessed text to a file
-  // await fs.writeFile(outputPath, text, 'utf-8')
-  // console.log(`Preprocessed structure written to ${outputPath}`)
-  return { prompt: preprocessPrompt, text: text }
+async function callOpenAI(prompt: string) {
+  const response = await openai.chat.completions.create({
+    // model: 'o1-mini',
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }]
+  })
+  const text = response.choices[0].message.content
+  if (text && text.startsWith('```json')) {
+    const jsonBody = text.replace('```json', '').replace('```', '').trim()
+    return JSON.parse(jsonBody)
+  }
+  return text
 }
 
-async function extractChapters(
-  fileContent: string,
-  summary: string,
-  useGemini: boolean = false,
-  geminiModel: string = 'gemini-1.5-pro'
-) {
-  // Check if the cached chapters already exist
-  // const outputPath = 'cached_extracted_chapters.json'
-  // try {
-  //   const existingContent = await fs.readFile(outputPath, 'utf-8')
-  //   console.log(`Cached extracted chapters exist. Loading from ${outputPath}`)
-  //   return JSON.parse(existingContent)
-  // } catch (error) {
-  //   // File doesn't exist, continue with generating and executing the function
-  //   console.log(`Cached extracted chapters not found. Generating new chapters.`)
-  // }
-
+export async function getChapterTitles(fileContent: string) {
   const schema = {
-    type: SchemaType.OBJECT,
-    properties: {
-      script: { type: SchemaType.STRING }
-    },
-    required: ['script']
+    type: SchemaType.ARRAY,
+    items: {
+      type: SchemaType.STRING
+    }
   }
-  const userPrompt = `
-<structure_summary>
-\`\`\`
-${summary}
-\`\`\`
-</structure_summary>
-Write a Javascript function named extractChapters that takes a string parameter (the manuscript content) and returns an array of chapter objects.
+  const prompt = `
+  <manuscript>
+  ${fileContent}
+  </manuscript>
+  Task: Extract the FULL table of contents from the given manuscript.
 
-Output ONLY a JSON object with a "script" property that contains the function definition, with no additional text or explanations. The function should start with "function extractChapters(manuscript) {" and end with "}".
+Output format: Provide a JSON array of strings, where each string contains a chapter title.
 
-Use the structure summary provided above to inform your chapter extraction logic.
+Important guidelines:
+* Use the COMPLETE title as it appears in the manuscript. Do not truncate or modify them in any way.
+* Do not add or remove chapter numbers if they're part of the original title.
+* Include sections like Prologue, Epilogue, etc.
 
-The function should:
-- Detect chapter titles based on the list from the structure summary.
-- Handle variations in chapter title formatting (e.g., "Chapter 1", "CHAPTER ONE", "1. Introduction").
-- Ignore any content from the table of contents or front matter.
-
-Each chapter object should have two properties:
-1. title: The full chapter or section title (string)
-2. content: The chapter content, excluding the title (string)
-
-Important considerations:
-- Ensure that all strings in the function are properly escaped, especially single and double quotes.
-- Do not use regular expressions.
-- Do NOT include chapter titles in the 'content' property.
-- Consider that chapter titles may be in the middle of the content.
+Exclusions:
+* Subtitles, exhibit titles, and other minor section titles.
+* Book title, author name, or copyright information.
 `
-  // console.log('----------------------------------------')
-  // console.log(userPrompt)
-  // console.log('----------------------------------------')
-  // const model = 'tunedModels/generate-num-1113'
-  const model = 'gemini-1.5-pro'
-  const output = await callGemini(userPrompt, 1, schema, model)
-  const script = output.script
-  // console.log(text)
 
+  const chapterTitles = await callGemini(prompt, 0, schema)
+  const postProcessedChapterTitles = await postProcessChapterTitles(chapterTitles)
   console.log('----------------------------------------')
-  console.log(script)
+  console.log(postProcessedChapterTitles)
   console.log('----------------------------------------')
 
-  // Evaluate the script to get the extractChapters function
-  // @ts-ignore
-  // @esbuild-disable-next-line direct-eval
-  const extractChapters = eval(`(${script})`)
+  return { chapterTitles: postProcessedChapterTitles, prompt }
+}
 
-  // Execute the extractChapters function
-  const chapters = extractChapters(fileContent)
+async function postProcessChapterTitles(chapterTitles: any[]) {
+  console.log('----------------------------------------')
+  console.log(chapterTitles)
+  console.log('----------------------------------------')
 
-  // Remove any chapters that are empty
-  const filteredChapters = chapters.filter(
-    (chapter: any) => chapter.content.length > chapter.title.length
-  )
+  let titles = chapterTitles
 
-  // Trim whitespace from the beginning and end of each chapter
-  const trimmedChapters = filteredChapters.map((chapter: any) => {
-    chapter.title = chapter.title.trim()
+  // Remove empty strings
+  titles = titles.filter((title) => title.trim() !== '')
+
+  // Replace multiple newlines with a single newline
+  titles = titles.map((title) => title.replace(/[\r\n\s\t]+/g, ' '))
+
+  // Remove "Table of Contents"
+  titles = titles.filter((title) => title.toLowerCase().trim() !== 'table of contents')
+
+  // Remove numbers from the beginning of the title
+  titles = titles.map((title) => title.replace(/^[0-9]+[\.\:]*\s*/g, ''))
+
+  // Trim leading and trailing whitespace
+  titles = titles.map((title) => title.trim())
+
+  return titles
+}
+
+export async function extractChapters(manuscript: string, chapterTitles: string[]) {
+  const chapters = []
+
+  const stats = analyzeChapterTitles(manuscript, chapterTitles)
+  console.log('stats', stats)
+
+  let currentChapter: { title: string; content: string } | null = null
+  let truncatedManuscript = await removeToc(manuscript, chapterTitles, stats)
+
+  const lines = truncatedManuscript.split('\n')
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (line === '') {
+      continue
+    }
+
+    // Check if the line matches any chapter title
+    let matchingTitle = chapterTitles.find((title) =>
+      compareTitles(line, title, !stats.strongTitleMatch)
+    )
+
+    // Don't move to the next chapter if the title is the same as the current chapter
+    const isCurrentTitle = matchingTitle && currentChapter && matchingTitle === currentChapter.title
+
+    if (matchingTitle && !isCurrentTitle) {
+      const isTitleInLine = titleInLine(line, matchingTitle)
+      // If we find a matching title, start a new chapter
+      if (currentChapter) {
+        chapters.push(currentChapter)
+      }
+      currentChapter = {
+        title: matchingTitle,
+        content: isTitleInLine ? line.replace(matchingTitle, '') : ''
+      }
+    } else if (currentChapter) {
+      // If we are within a chapter, add the line to the content
+      currentChapter.content += line + '\n'
+    }
+  }
+
+  // Push the last chapter
+  if (currentChapter) {
+    chapters.push(currentChapter)
+  }
+
+  return postProcessChapters(chapters)
+}
+
+async function postProcessChapters(chapters: any[]) {
+  let filteredChapters = chapters
+  // Remove empty chapters
+  filteredChapters = filteredChapters.filter((chapter) => chapter.content.trim() !== '')
+
+  // Trim leading and trailing whitespace
+  filteredChapters = filteredChapters.map((chapter) => {
     chapter.content = chapter.content.trim()
     return chapter
   })
 
-  return { chapters: trimmedChapters, script, prompt: userPrompt }
+  return filteredChapters
 }
 
-async function postProcessChapter(chapter: any) {
+export async function postProcessChapter(chapter: any) {
   const schema = {
     type: SchemaType.OBJECT,
     properties: {
@@ -206,34 +410,34 @@ async function postProcessChapter(chapter: any) {
 
   // console.log(chapter)
   const prompt = `
-    The following JSON object is a chapter from a book manuscript. 
-    Your job is to evaluate the content, make sure it looks correct, and return a new JSON object with the same structure.
+    The following is a chapter from a book manuscript. 
+    Your job is to evaluate the content, make sure it looks correct, and return the modified chapter.
+    Output should be a JSON object with a "content" property.
 
-    \`\`\`json
-    ${JSON.stringify(chapter)}
+    \`\`\`chapter
+    ${chapter.content}
     \`\`\`
 
-    Output is a JSON object that MUST contain "title", "content", and "flag" properties.
-
     Tasks:
-    1. If there is no or very little content, set the "flag" to true.
-    2. If the content is a duplicate of the title, set the "flag" to true.
-    3. If the content only includes other titles, set the "flag" to true.
-    4. Fix any text encoding issues.
-    5. Fix issues from PDF to TXT conversion, like broken words.
-    6. Format the content for text-to-speech: Each paragraph should have only 2-3 sentences.
-    7. Paragraphs should be separated by double newlines.
-    8. Remove trailing and leading spaces in each paragraph.
-    9. Ensure that the "content" property is always included, even if it's empty.
-    10. Ensure that the contents are escaped properly so that it can be parsed as valid JSON.
+    1. Fix any text encoding issues.
+    2. Fix issues from PDF to TXT conversion, like broken words.
+    3. Format the content for text-to-speech: Each paragraph should have only 2-3 sentences.
+    4. Paragraphs should be separated by double newlines.
+    5. Ensure that the "content" property is always included, even if it's empty.
     `
 
   try {
-    const processedChapter = await callGemini(prompt, 0.5, schema)
+    const processedChapter = await callOpenAI(prompt)
+    console.log('----------------------------------------')
+    console.log(processedChapter)
+    console.log('----------------------------------------')
 
-    // console.log(processedChapter)
-    processedChapter.processed = true
-    return processedChapter
+    return {
+      ...chapter,
+      content: processedChapter.content,
+      processed: true,
+      flag: false
+    }
   } catch (error: any) {
     console.error(`Error processing chapter: ${chapter.title}`, error)
     chapter.processed = true
@@ -242,8 +446,7 @@ async function postProcessChapter(chapter: any) {
   }
 }
 
-// New function to evaluate extraction
-async function evaluateExtraction(extractedChapters: any[], manuscript: string) {
+export async function evaluateExtraction(extractedChapters: any[], manuscript: string) {
   const schema = {
     type: SchemaType.OBJECT,
     properties: {
@@ -283,9 +486,6 @@ async function evaluateExtraction(extractedChapters: any[], manuscript: string) 
 
   try {
     const result = await callGemini(prompt, 0, schema)
-    console.log('----------------------------------------')
-    console.log(result)
-    console.log('----------------------------------------')
     return result
   } catch (error) {
     console.error('Error evaluating extraction:', error)
@@ -293,59 +493,16 @@ async function evaluateExtraction(extractedChapters: any[], manuscript: string) 
   }
 }
 
-async function removeToc(manuscript: string) {
-  const truncatedManuscript = manuscript.slice(0, 10000)
-  console.log('truncatedManuscript', '****', truncatedManuscript, '****')
-  const schema = {
-    type: 'string'
-  }
-  const prompt = `
-  <manuscript>
-  ${truncatedManuscript}
-  </manuscript>
-  Remove the table of contents from the attached book manuscript.
-  Return the remaining content.
-  Output as a JSON string.
-  `
-  const result = await callGemini(prompt, 0.5, schema)
-  // re-assemble the result with the rest of the manuscript
-  console.log('-------')
-  console.log('result', '****', result, '****')
-  console.log('-------')
-  const resultWithRestOfManuscript = `${result}\n${manuscript.slice(10000)}`
-  return resultWithRestOfManuscript
+export async function processManuscript(manuscript: string) {
+  const { chapterTitles, prompt } = await getChapterTitles(manuscript)
+  const chapters = await extractChapters(manuscript, chapterTitles)
+  return { chapters, prompt }
 }
 
-// Update the main processing function
-async function processManuscript(
-  fileContent: string,
-  useGemini: boolean = false,
-  geminiModel: string = 'gemini-1.5-pro'
-) {
-  try {
-    fileContent = convertToAscii(fileContent)
-
-    const { prompt: summaryPrompt, text: summary } = await preprocessManuscript(fileContent)
-    const {
-      prompt: chaptersPrompt,
-      chapters,
-      script
-    } = await extractChapters(fileContent, summary, useGemini, geminiModel)
-
-    return { chapters, summary, script, summaryPrompt, chaptersPrompt }
-  } catch (error) {
-    console.error('Error:', error)
-    throw error
-  }
-}
-
-async function processManuscriptFromS3(key: string) {
+export async function processManuscriptFromS3(key: string) {
   const fileContent = await getS3Content(key)
   if (!fileContent) {
     throw new Error('File content is undefined')
   }
   return await processManuscript(fileContent)
 }
-
-// Export the main function for use in other modules
-export { processManuscriptFromS3, processManuscript, postProcessChapter, evaluateExtraction }

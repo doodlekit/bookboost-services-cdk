@@ -7,5 +7,8 @@ cdk.out
 
 dist
 env.json
+.env
 services/processor/trainer
 .DS_Store
+services/processor/tests/extract/output
+services/processor/tests/extract/training_data

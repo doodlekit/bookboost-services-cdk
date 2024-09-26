@@ -73,7 +73,7 @@ export class FilesStack extends cdk.Stack {
       authorizationScopes: ['manage:users'],
       path: '/admin/{userId}/files',
       method: httpapi.HttpMethod.GET,
-      entry: join(__dirname, 'files/api.ts'),
+      entry: join(__dirname, 'files/admin.ts'),
       handler: 'list'
     })
 

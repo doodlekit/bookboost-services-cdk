@@ -25,7 +25,8 @@ export const handler = async (event: EventBridgeEvent<any, any>) => {
       const fileId = job.file.id
       await updateFile(userId, fileId, {
         contents_object: job.chapters_object,
-        contents_extraction_evaluation: job.extraction_evaluation
+        contents_extraction_evaluation: job.extraction_evaluation,
+        converted_file: job.converted_file
       })
       return
     default:
